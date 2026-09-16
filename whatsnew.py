@@ -29,6 +29,12 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.34.0": [
+        "Timer: a new TRANSPARENT background — clean-edged numbers, no "
+        "green screen to key out.",
+        "STANDARD for CapCut and editors; PRORES to put it straight on "
+        "a ProPresenter layer.",
+    ],
     "1.33.0": [
         "YouTube download: separate links with a comma or a new line — "
         "both work the same.",
