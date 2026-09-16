@@ -11,9 +11,13 @@ Owner: Fynn (GitHub `jimhoggey`). Repo: **jimhoggey/ServiceVisuals-App** (public
 
 - **Consult the graphify knowledge graph before changing code.** From the repo
   root: `graphify query "<question>" --budget 700`. It shows what a change
-  touches across files. Refresh it after a big change with `graphify . --update`
-  on a subagent. `graphify-out/` is gitignored. Note: that build does not index
-  `.css`, so style.css being reported "deleted" is a known quirk, not real.
+  touches across files. **Then update it as the last step of the change**, so
+  the next agent queries a graph that still matches the code: `graphify update
+  .` on a subagent. Use that subcommand rather than a bare `graphify .` — it
+  re-extracts the code locally and needs no API key, where a full build asks
+  for an LLM key to read `docs/` and would send repo content to a third party.
+  `graphify-out/` is gitignored. Note: that build does not index `.css`, so
+  style.css being reported "deleted" is a known quirk, not real.
 - **Subagents run on Sonnet or Haiku — never Opus or Fable.** This is the
   owner's standing instruction, including for heavy background jobs.
 - **Features are built from a written spec.** Put it in `docs/specs/<name>.md`
