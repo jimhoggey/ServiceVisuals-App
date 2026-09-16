@@ -563,6 +563,36 @@ textarea:focus {
 }
 .hint.is-bad { color: var(--red-ink); }
 
+/* Technical codec line under the transparent-format recommendation (spec:
+   docs/specs/alpha-export.md, copy review round 3) -- sits right under
+   .hint's own dim/small style but a step further down in both size and
+   opacity, and pulled tight to the line above (10px margin -> 2px), so
+   it reads as a subordinate footnote rather than a second sentence of
+   equal weight. */
+.hint-tech {
+  margin-top: 2px;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+/* "Why this exists" note, PRORES only (spec: docs/specs/alpha-export.md,
+   copy review round 4) -- the owner asked for this to be visually
+   distinct from both the recommendation line (.hint) and the technical
+   line (.hint-tech) above it, not just more plain text, so it borrows
+   the boxed/left-border callout treatment already used for .ai-key-state
+   (amber accent instead of that one's green, since this is an
+   explanatory note rather than a connected/ready status). */
+.transparent-why-note {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 4px;
+  background: rgba(232, 180, 79, 0.08);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
 /* style picker cards */
 
 .style-pick {
@@ -1015,6 +1045,29 @@ canvas {
 #timer-bg-green[aria-pressed="true"] .btn-green-dot {
   background: var(--green);
   box-shadow: 0 0 6px rgba(63, 220, 123, 0.75);
+}
+
+/* ---- Transparent toggle (spec: docs/specs/alpha-export.md) ---- */
+/* Same subtle .btn-file treatment as green screen above. Off state is the
+   same neutral dot; ON, it becomes a tiny checkerboard instead of a
+   colour — there is no colour for "transparent" — echoing the preview
+   canvas's own checkerboard convention (drawCheckerboard() in timer.js). */
+.btn-alpha-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6a6e75;
+}
+#timer-bg-transparent[aria-pressed="true"] {
+  border-color: var(--ink);
+  color: var(--ink);
+  background: rgba(233, 231, 226, 0.1);
+}
+#timer-bg-transparent[aria-pressed="true"] .btn-alpha-dot {
+  background: conic-gradient(
+    var(--ink) 0deg 90deg, #6a6e75 90deg 180deg,
+    var(--ink) 180deg 270deg, #6a6e75 270deg 360deg);
+  box-shadow: 0 0 6px rgba(233, 231, 226, 0.6);
 }
 
 /* Small inline panel (not a modal) opened by "+ ADD IMAGE" — same treatment

@@ -125,7 +125,16 @@ def _counted(tool, fn, extra_props=None):
 
 
 def _timer_props(options):
-    if options.get("green_screen"):
+    # alpha_qtrle/alpha_prores (docs/specs/alpha-export.md) join green/
+    # none/one/many as two more fixed values of our own words — never a
+    # filename, a count, or anything the operator typed (stats.py's
+    # privacy rule).
+    transparent = options.get("transparent")
+    if transparent == "qtrle":
+        bg = "alpha_qtrle"
+    elif transparent == "prores":
+        bg = "alpha_prores"
+    elif options.get("green_screen"):
         bg = "green"
     else:
         n = len(options.get("backgrounds") or [])
@@ -251,7 +260,11 @@ def _report_unhandled(sender, exception, **_extra):
 # no path separators, no control characters, and one of our extensions.
 # Every call site still resolves the realpath and checks containment, which
 # is the real boundary; this is the cheap first gate in front of it.
-EXPORT_FILENAME_RE = re.compile(r"[^/\\\x00-\x1f]{1,200}\.(mp4|png|mp3)")
+# mov added for the timer's alpha-channel export (docs/specs/alpha-
+# export.md) — both qtrle and ProRes share this one extension, so this is
+# a one-item addition. Without it, Reveal in Finder/Show file rejects
+# every alpha export even though the file rendered successfully.
+EXPORT_FILENAME_RE = re.compile(r"[^/\\\x00-\x1f]{1,200}\.(mp4|mov|png|mp3)")
 
 
 # ---------------------------------------------------------------------------

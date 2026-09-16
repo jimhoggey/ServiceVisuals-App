@@ -311,7 +311,70 @@
               <p class="hint bg-strip-empty" id="timer-bg-empty">No images &#8212; plain dark background.</p>
               <button type="button" class="btn btn-file" id="timer-bg-add" aria-haspopup="true" aria-expanded="false">+ ADD IMAGE</button>
               <button type="button" class="btn btn-file" id="timer-bg-green" aria-pressed="false"><span class="btn-green-dot" aria-hidden="true"></span>GREEN SCREEN</button>
+              <!-- Transparent export (spec: docs/specs/alpha-export.md)
+                   -- same shape as GREEN SCREEN above, mutually exclusive
+                   with it (see the click handlers in timer.js). -->
+              <button type="button" class="btn btn-file" id="timer-bg-transparent" aria-pressed="false"><span class="btn-alpha-dot" aria-hidden="true"></span>TRANSPARENT</button>
             </div>
+
+            <!-- Coordinator-directed addition (round 2 of the copy
+                 review, docs/specs/alpha-export.md): the owner asked
+                 which format to pick for a plain 5-minute timer and the
+                 honest answer is "neither, leave Transparent off" -- this
+                 steers a volunteer away from reaching for Transparent on
+                 a normal Sunday timer, before they ever open the format
+                 picker below. Shown only while TRANSPARENT is on. -->
+            <p class="hint" id="timer-transparent-usage-hint" hidden>Only for putting the timer over your own footage in an editor. For a timer that goes straight on screen, leave this off &#8212; the normal export is 1.5 MB instead of 180 MB.</p>
+
+            <!-- Format choice: STANDARD (qtrle) / PRORES (prores). Copy
+                 here is a coordinator-directed correction OVER the spec's
+                 original SMALLER FILE/MAXIMUM COMPATIBILITY wording (spec:
+                 docs/specs/alpha-export.md) -- the owner found that
+                 wording didn't say which button was ProRes, and measured
+                 both formats as visually identical (qtrle pixel-exact,
+                 ProRes max channel error 1/255) so nothing here may imply
+                 the smaller file is lower quality. The qtrle/prores API
+                 value tokens and ids are UNCHANGED -- display copy only.
+                 Shown only while TRANSPARENT is on (applyTimerBg() in
+                 timer.js). Reuses the seg-group/seg markup already used
+                 for Timer's own MODE control and QR's STYLE control: no
+                 new CSS. -->
+            <p class="hint" id="timer-transparent-format-intro" hidden>Both save a .mov with a see-through background.</p>
+            <div class="seg-group" id="timer-transparent-format-group" hidden>
+              <label class="seg">
+                <input class="vh" type="radio" name="timer-transparent-format" id="timer-transparent-format-qtrle" value="qtrle" checked>
+                <span>STANDARD</span>
+              </label>
+              <label class="seg">
+                <input class="vh" type="radio" name="timer-transparent-format" id="timer-transparent-format-prores" value="prores">
+                <span>PRORES</span>
+              </label>
+            </div>
+            <p class="hint" id="timer-transparent-hint" hidden>Use this one. Pixel-perfect, and about 180 MB for a 5-minute countdown. Opens in CapCut and other editing software. Not tested in ProPresenter.</p>
+            <!-- Copy review round 4 (docs/specs/alpha-export.md): PRORES
+                 only -- the owner wants the ProPresenter use case stated,
+                 not just implied. Warranted here specifically because
+                 ProRes 4444 with alpha IS on ProPresenter's documented
+                 format list (unlike qtrle, which stays hedged above) --
+                 this is the one place in the UI the ProPresenter claim is
+                 safe to make outright. Boxed/left-border callout
+                 (.transparent-why-note in style.css) so it reads as a
+                 distinct explanatory note, not a continuation of the
+                 plain recommendation line above it. Visibility toggled
+                 live by applyTimerBg() in timer.js; text is static since
+                 it never varies with format (shown only for PRORES). -->
+            <p class="transparent-why-note" id="timer-transparent-why" hidden>Why this exists: ProPresenter can play a .mov with a see-through background. Put your own video or image on a layer underneath and it shows through behind the numbers &#8212; no editing, and no green screen to key out.</p>
+            <!-- Copy review round 3 (docs/specs/alpha-export.md): a
+                 technical second line for the rare volunteer who is also
+                 the editor and wants to verify compatibility themselves.
+                 This overrides the spec's "never name the codec" rule at
+                 the owner's explicit request -- the plain-English line
+                 above stays the prominent recommendation, this stays
+                 visually subordinate (.hint-tech in style.css) so a
+                 volunteer's eye skips it. Text set live by applyTimerBg()
+                 in timer.js, values taken from probing the real encoded
+                 files (not from memory). -->
+            <p class="hint hint-tech" id="timer-transparent-tech" hidden></p>
 
             <div class="panel bg-picker" id="timer-bg-picker" hidden>
               <div class="bg-row">
@@ -395,7 +458,7 @@
           <canvas id="timer-canvas" width="960" height="540" role="img" aria-label="Timer preview"></canvas>
           <div class="preview-meta">
             <p class="preview-caption">PREVIEW &#8212; approximate</p>
-            <p class="spec-line">1920x1080 - 30fps - H.264 MP4</p>
+            <p class="spec-line" id="timer-spec-line">1920x1080 - 30fps - H.264 MP4</p>
             <p class="estimate" id="timer-estimate"></p>
           </div>
 

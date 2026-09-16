@@ -84,24 +84,35 @@ def probe(path):
         sm = re.search(r"(\d{3,5})x(\d{3,5})", line)
         if sm:
             info["size"] = (int(sm.group(1)), int(sm.group(2)))
-        pm = re.search(r"yuv\w+|rgb\w+", line)
+        # argb\w* is required, not just rgb\w+, to see qtrle's "argb"
+        # pixfmt at all (docs/specs/alpha-export.md): "rgb\w+" needs a
+        # word char AFTER "rgb", and "argb" has none, so
+        # re.search(r"yuv\w+|rgb\w+", "argb(progressive)") returns None
+        # even though the pixfmt is right there in the string. Verified
+        # this still matches "yuva444p12le" and "yuv420p" exactly as
+        # before, and now also matches "argb".
+        pm = re.search(r"yuv\w+|rgb\w+|argb\w*", line)
         if pm:
             info["pixfmt"] = pm.group(0)
     return info
 
 
-def verify(name, filename, expected_duration):
+def verify(name, filename, expected_duration, expected_codec="h264",
+          expected_size=(1920, 1080), expected_pixfmt="yuv420p"):
     path = os.path.join(EXPORTS_DIR, filename)
     print("{0}: {1}".format(name, filename))
     if not os.path.isfile(path):
         check("{0} file exists".format(name), False, "missing: " + path)
         return
     info = probe(path)
-    check("{0} codec h264".format(name), info["codec"] == "h264",
+    check("{0} codec {1}".format(name, expected_codec),
+          info["codec"] == expected_codec,
           "got {0!r}".format(info["codec"]))
-    check("{0} size 1920x1080".format(name), info["size"] == (1920, 1080),
+    check("{0} size {1}x{2}".format(name, *expected_size),
+          info["size"] == expected_size,
           "got {0!r}".format(info["size"]))
-    check("{0} pixfmt yuv420p".format(name), info["pixfmt"] == "yuv420p",
+    check("{0} pixfmt {1}".format(name, expected_pixfmt),
+          info["pixfmt"] == expected_pixfmt,
           "got {0!r}".format(info["pixfmt"]))
     dur = info["duration"]
     ok = dur is not None and abs(dur - expected_duration) <= 0.5
@@ -548,12 +559,15 @@ def check_clock_validation():
     # Addendum (green-screen.md): green_screen defaults to False, sitting
     # alongside the other three Background-group defaults for a caller that
     # never heard of it either.
+    # Addendum (alpha-export.md): transparent defaults to False, a fifth
+    # Background-group default for the same reason.
     expected = {"minutes": 1, "seconds": 0, "style": "ring",
                 "accent": "#e8b44f", "warn_last10": False,
                 "hold_seconds": 3, "show_millis": False,
                 "fixed_format": False,
                 "backgrounds": [], "bg_seconds": 10, "bg_dim": 45,
-                "bg_blur": False, "green_screen": False}
+                "bg_blur": False, "green_screen": False,
+                "transparent": False}
     clean = validation.validate_timer_options(countdown)
     check("a countdown payload (mode absent) validates unchanged",
           clean == expected, "got {0!r}".format(clean))
@@ -649,6 +663,53 @@ def check_clock_validation():
                  dict(countdown, green_screen="yes"),
                  "Green screen must be true or false.")
 
+    # docs/specs/alpha-export.md: transparent, a third Background-group
+    # choice, valid in both modes. Like green_screen, a truthy value
+    # forces backgrounds -> [] WITHOUT validating the ids sent, so a
+    # stale/deleted id in a hidden set can never block a transparent
+    # export either.
+    for fmt in ("qtrle", "prores"):
+        clean = validation.validate_timer_options(
+            dict(countdown, transparent=fmt,
+                 backgrounds=["deadbeefdeadbeef"]))
+        check("transparent={0!r} (countdown): backgrounds -> [] even "
+              "with a bogus id".format(fmt),
+              clean.get("transparent") == fmt
+              and clean.get("backgrounds") == [],
+              "got {0!r}".format(clean))
+        clean = validation.validate_timer_options(
+            dict(clock, transparent=fmt,
+                 backgrounds=["deadbeefdeadbeef"]))
+        check("transparent={0!r} (clock): backgrounds -> [] even with "
+              "a bogus id".format(fmt),
+              clean.get("transparent") == fmt
+              and clean.get("backgrounds") == [],
+              "got {0!r}".format(clean))
+
+    clean = validation.validate_timer_options(countdown)
+    check("transparent omitted defaults to False",
+          clean.get("transparent") is False, "got {0!r}".format(clean))
+
+    expect_error("a bad transparent value is rejected with the exact "
+                 "message",
+                 dict(countdown, transparent="png"),
+                 'Transparent background must be "qtrle", "prores", or '
+                 "false.")
+
+    # `is not False` in validation.py means a stray True must be
+    # rejected exactly like a bad string, not silently accepted as if
+    # it named some default format — there is no single "on" here.
+    expect_error("a stray True for transparent is rejected, not treated "
+                 "as a default format",
+                 dict(countdown, transparent=True),
+                 'Transparent background must be "qtrle", "prores", or '
+                 "false.")
+
+    expect_error("transparent and green_screen together is rejected",
+                 dict(countdown, transparent="qtrle", green_screen=True),
+                 "Choose either green screen or a transparent "
+                 "background, not both.")
+
 
 def check_green_screen():
     """docs/specs/green-screen.md: render.timer._plates() builds a flat
@@ -708,6 +769,160 @@ def check_green_screen():
     finally:
         if os.path.isfile(path):
             os.unlink(path)
+
+
+def check_alpha_export():
+    """docs/specs/alpha-export.md: render.timer._plates()'s transparent
+    branch, the _paste_digits() alpha-compositing fix (a regression
+    guard for the exact Pillow bug its own code comment describes), the
+    glyph's anti-aliased (fractional, not binary) edge alpha, and a real
+    encoded render in each alpha format, pixel-verified on a frame
+    pulled back out through the bundled ffmpeg's own decoder. Mirrors
+    check_green_screen()'s shape; check_green_screen() itself staying
+    green (called separately, right before this function) is the
+    regression proof that Transparent changed nothing about Green
+    screen.
+    """
+    from PIL import Image
+
+    from render.timer import (
+        _digits_metrics, _paste_digits, _plates, _render_digits)
+
+    print("Timer: transparent (alpha) plate + paste fix + render")
+
+    # 1. _plates() with transparent returns one fully transparent RGBA
+    # plate. Which format string is passed doesn't matter to _plates()
+    # — it only ever checks truthiness — so "qtrle" stands in for both.
+    plates, _accent_tile = _plates(
+        {"transparent": "qtrle"}, "ring", (1, 2, 3))
+    check("_plates() with transparent returns exactly one plate",
+          len(plates) == 1, "got {0!r}".format(len(plates)))
+    check("that plate's mode is RGBA",
+          bool(plates) and plates[0].mode == "RGBA",
+          "got {0!r}".format(plates[0].mode if plates else None))
+    px = plates[0].getpixel((10, 10)) if plates else None
+    check("that plate's pixel (10, 10) reads (0, 0, 0, 0)",
+          px == (0, 0, 0, 0), "got {0!r}".format(px))
+
+    # 2. The _paste_digits alpha fix, tested directly (not through a
+    # full render) — a regression guard for the exact bug its code
+    # comment describes: pasting an RGBA block using its OWN alpha band
+    # as the paste mask pulls an already-opaque destination's alpha
+    # DOWN toward the source's own (lower) alpha, where
+    # Image.alpha_composite() correctly leaves an opaque destination
+    # opaque.
+    track_px = Image.new("RGBA", (60, 60), (35, 38, 43, 255))
+    half_glyph = Image.new("RGBA", (60, 60), (242, 240, 235, 128))
+    _paste_digits(track_px, half_glyph, 0, 0, False, alpha=True)
+    dest_alpha = track_px.getpixel((30, 30))[3]
+    check("_paste_digits(alpha=True): a 50%-alpha block pasted over an "
+          "opaque destination leaves it fully opaque (alpha=255)",
+          dest_alpha == 255, "got alpha={0!r}".format(dest_alpha))
+
+    # 3. Glyph edge alpha is fractional, not binary — the entire point
+    # of this feature. A hard 0/255-only cutout would pass every other
+    # check here and still reproduce the green-screen fringe problem
+    # this feature exists to remove, just moved into the alpha channel.
+    met = _digits_metrics(200)
+    block = _render_digits("8", (242, 240, 235), met)
+    alpha_band = block.split()[-1]
+    lo, hi = alpha_band.getextrema()
+    has_mid = any(c > 0 for c in alpha_band.histogram()[1:255])
+    check("_render_digits glyph block has a fully transparent pixel "
+          "(background)", lo == 0, "min alpha = {0!r}".format(lo))
+    check("_render_digits glyph block has a fully opaque pixel "
+          "(glyph interior)", hi == 255, "max alpha = {0!r}".format(hi))
+    check("_render_digits glyph block has fractional edge alpha "
+          "(anti-aliased, not a hard cutout)",
+          has_mid, "no alpha strictly between 0 and 255 was found")
+
+    def render_and_check(fmt, expected_codec, expected_pixfmt,
+                         style="classic"):
+        """Checks 4/5: a real 6s countdown in one alpha format,
+        pixel-verified on an extracted, decoded frame — a genuine
+        round-trip proof, not just a container-tag inspection (both
+        formats round-trip alpha correctly through this ffmpeg build's
+        own decoder, confirmed while researching the spec).
+        """
+        descriptor = "_alpha_" + fmt
+        filename = render_timer(
+            {"minutes": 0, "seconds": 6, "style": style,
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2, "transparent": fmt},
+            lambda pct: None)
+        path = os.path.join(EXPORTS_DIR, filename)
+        try:
+            check("{0}: filename ends .mov".format(fmt),
+                  filename.endswith(".mov"),
+                  "got {0!r}".format(filename))
+            check("{0}: filename carries the {1} descriptor".format(
+                      fmt, descriptor),
+                  descriptor in filename, "got {0!r}".format(filename))
+            verify("timer/" + style + "-" + fmt, filename, 8.0,
+                   expected_codec=expected_codec,
+                   expected_pixfmt=expected_pixfmt)
+
+            frame_dir = tempfile.mkdtemp(prefix="sv-smoke-alpha-")
+            try:
+                frame_path = os.path.join(frame_dir, "frame0.png")
+                proc = subprocess.run(
+                    [FFMPEG, "-y", "-i", path, "-frames:v", "1",
+                     "-pix_fmt", "rgba", frame_path],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                got_frame = os.path.isfile(frame_path)
+                check("{0}: a frame extracts cleanly with alpha kept "
+                      "(-pix_fmt rgba)".format(fmt), got_frame,
+                      proc.stderr.decode("utf-8", "replace")[-300:])
+                if got_frame:
+                    frame = Image.open(frame_path).convert("RGBA")
+                    bg_alpha = frame.getpixel((10, 10))[3]
+                    check("{0}: background-area pixel (10, 10) is "
+                          "fully transparent (alpha == 0)".format(fmt),
+                          bg_alpha == 0,
+                          "got alpha={0!r}".format(bg_alpha))
+                    frame_alpha = frame.split()[-1]
+                    lo, hi = frame_alpha.getextrema()
+                    has_mid = any(
+                        c > 0 for c in frame_alpha.histogram()[1:255])
+                    check("{0}: a digit-interior pixel is fully opaque "
+                          "(alpha >= 250)".format(fmt), hi >= 250,
+                          "max alpha = {0!r}".format(hi))
+                    check("{0}: at least one digit-edge pixel has "
+                          "fractional alpha (0 < alpha < 255), proving "
+                          "the glyph is anti-aliased through a real "
+                          "encode/decode round trip".format(fmt),
+                          has_mid,
+                          "no intermediate alpha value found")
+            finally:
+                shutil.rmtree(frame_dir, ignore_errors=True)
+        finally:
+            if os.path.isfile(path):
+                os.unlink(path)
+
+    # 4. qtrle: lossless RLE, round-trips alpha exactly — the probed
+    # pixfmt matches the encode request byte for byte (verified while
+    # researching the spec; see render/encoder.py's ALPHA_FORMATS).
+    render_and_check("qtrle", "qtrle", "argb")
+
+    # 5. ProRes 4444: the probed pixfmt is "yuva444p12le", NOT the
+    # "yuva444p10le" passed at encode time — ProRes 4444's bitstream
+    # always carries alpha at 12-bit internally regardless of the
+    # 10-bit input request. Expected behaviour (confirmed while
+    # researching the spec by actually probing a real encode), not a
+    # bug — do not "fix" this to yuva444p10le.
+    render_and_check("prores", "prores", "yuva444p12le")
+
+    # 5b. Ring and bar, one format each. classic draws digits onto bare
+    # transparency; ring and bar paste them over an opaque track, which
+    # is the only place a compositing regression could reintroduce a
+    # fringe. A review rendered these by hand and found them clean --
+    # this keeps them that way without another human doing it.
+    render_and_check("qtrle", "qtrle", "argb", style="ring")
+    render_and_check("prores", "prores", "yuva444p12le", style="bar")
+
+    # 6. Green screen output is unchanged — no new check needed here;
+    # check_green_screen() (called separately from main(), right before
+    # this function) staying green IS the regression proof.
 
 
 def check_qr_styles():
@@ -2228,6 +2443,8 @@ def main():
     check_clock_validation()
     print()
     check_green_screen()
+    print()
+    check_alpha_export()
     print()
     check_qr_styles()
     print()

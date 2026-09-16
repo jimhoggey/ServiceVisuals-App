@@ -32,26 +32,61 @@ file that says so — a transparent background, not a green one.
 
 This is possible with zero new dependencies. The bundled imageio-ffmpeg
 binary already ships `prores_ks` (Apple ProRes, alpha-capable at profile
-4444) and `libvpx-vp9` (alpha-capable WebM) — confirmed present in this
-repo's bundled binary while researching this spec. Nothing to download,
-nothing to pin in `requirements.txt`.
+4444) and `qtrle` (QuickTime Animation RLE, alpha-capable via
+`-pix_fmt argb`) — both confirmed present in this repo's bundled binary
+while researching this revision (`ffmpeg -encoders` lists both;
+`ffmpeg -h encoder=qtrle` lists `argb` among its four supported pixel
+formats). Nothing to download, nothing to pin in `requirements.txt`.
 
-**The compatibility split is the whole design constraint.** ProPresenter
-supports ProRes 4444 with alpha but does not read WebM at all. CapCut reads
-WebM VP9 alpha but does not read ProRes 4444 alpha at all. There is no
-single alpha file that serves both audiences, so:
+**Real-world testing overturned the original two-format plan.** The first
+draft of this spec picked ProRes 4444 and WebM VP9 on the strength of
+ProPresenter's and CapCut's documentation, without a real clip in either
+app. The owner then actually exported real clips and dropped them into
+CapCut, and the result reverses half of that plan: **WebM VP9 alpha
+imports into CapCut as a solid white box — the alpha channel is dropped
+entirely, not merely degraded.** It is unusable for the one editor this
+format existed to serve, and every trace of it is removed from this
+revision: the codec table row, its ffmpeg flags (including
+`-auto-alt-ref 0`, a flag that only ever meant anything for VP9), its
+smoke check, and the "ffmpeg can't decode it, verify with a real player"
+caveats that existed solely because of it.
+
+ProRes 4444 imports transparent in CapCut, as hoped. So, unexpectedly,
+does `qtrle` (QuickTime Animation, `-c:v qtrle -pix_fmt argb`) — and the
+owner judged it side by side against this app's own green-screen-keyed
+1080p export as visibly higher quality, with less pixelated digit edges.
+Both surviving formats are `.mov` files that both import transparent in
+CapCut, so the design constraint is no longer "which app do you use" — it
+is file size versus certainty of ProPresenter support, since only ProRes
+is on ProPresenter's documented supported-format list (H.264, HEVC,
+ProRes variants, HAP); nobody has tested `qtrle` in ProPresenter, and
+this spec does not claim it works there. So:
 
 - GREEN SCREEN must stay exactly as it is today — it is the only option
   that works absolutely everywhere, alpha or not.
-- TRANSPARENT must offer **both** alpha formats and make the operator pick
-  the one that matches their own software, with the trade-off (file size,
-  in particular) explained in plain English before they commit to a choice.
+- TRANSPARENT must offer **both** `.mov` formats and make the operator
+  pick, with file size and the ProPresenter caveat both explained in
+  plain English before they commit to a choice — `qtrle` is the default
+  (smaller, and CapCut-confirmed), ProRes is the one to reach for when the
+  file is going straight into ProPresenter.
 
-Measured file sizes, 10 s at 1920×1080/30fps: H.264 green `.mp4` = 51 KB;
-WebM VP9 alpha `.webm` = 91 KB; ProRes 4444 alpha `.mov` = 16 MB.
-Extrapolated to a 15-minute countdown: roughly 4.6 MB (green), 8 MB (WebM),
-**1.4 GB** (ProRes). That 1.4 GB has to reach the operator before they
-click, not after.
+Measured file sizes: today's H.264 green `.mp4` runs about 51 KB for a
+10 s clip at 1920×1080/30fps (roughly 4.6 MB extrapolated to a 15-minute
+countdown) — the baseline either alpha format dwarfs. The two alpha
+formats were measured differently and more thoroughly this time, because
+a size number this consequential needs to survive real content: 210 real
+frames captured from the renderer (a 6 s classic countdown with
+**milliseconds ticking**, so every frame differs from the last — the
+worst case for any compressor), extrapolated to a 15-minute 1080p30
+countdown, come out to **ProRes 4444 ≈ 1.6 GB** and **qtrle ≈ 542 MB** —
+a third the size, and lossless. Quality tuning does not exist for the
+ProRes number: `-qscale:v` 4 / 11 / 20 produced 1641 / 1588 / 1588 MB,
+because profile 4444 is intra-only and already near-lossless, so nobody
+should spend time trying to tune it smaller later. The 542 MB qtrle
+figure is itself a worst case — a plain countdown without ticking
+milliseconds has one unique frame per displayed second, which RLE
+compresses far harder than a frame that changes 30 times a second. Both
+numbers have to reach the operator before they click, not after.
 
 *Correction to earlier framing:* today's code builds the green plate inside
 `render/timer.py`'s `_plates()`, not inside `_background()` (`_background()`
@@ -71,8 +106,13 @@ images/plain (today, unchanged), **GREEN SCREEN** (today, unchanged), and
 |---|---|
 | TRANSPARENT toggle | Small toggle button, `id="timer-bg-transparent"`, `type="button"`, `aria-pressed="false"` — same shape as `timer-bg-green`, placed right after it in `.bg-strip-wrap`. Clicking it toggles `aria-pressed`. |
 | Mutual exclusion | Turning TRANSPARENT on forces GREEN SCREEN's `aria-pressed` back to `"false"`, and vice versa — the two can never both read pressed. (`backgrounds` — the image set — is untouched either way, exactly like green screen today: turning both off again restores whatever image set was already chosen.) |
-| Format (shown only while Transparent is on) | Segmented control, two options, default the first: `PROPRESENTER` \| `CAPCUT & EDITORS`. Reuses the `.seg-group`/`.seg` markup already used for Timer's own MODE control and QR's STYLE control (radio inputs, `class="vh"`, one visible label each) — no new CSS component. |
-| Size/format hint (shown only while Transparent is on, updates live with the format choice) | `PROPRESENTER` selected: *"Saves a .mov file for ProPresenter. Large — about 16 MB per 10 seconds (roughly 1.4 GB for a 15-minute countdown)."* `CAPCUT & EDITORS` selected: *"Saves a .webm file for CapCut and most editors. Much smaller — about 91 KB per 10 seconds (roughly 8 MB for a 15-minute countdown). ProPresenter cannot open this one."* Names the app first, the file extension second, never the codec name — a volunteer needs to know what it opens with and how big it will be, not what a "profile 4444" is. |
+| Format (shown only while Transparent is on) | Segmented control, two options, default the first: `STANDARD` \| `PRORES`. Reuses the `.seg-group`/`.seg` markup already used for Timer's own MODE control and QR's STYLE control (radio inputs, `class="vh"`, one visible label each) — no new CSS component. |
+| Size/format hint (shown only while Transparent is on, updates live with the format choice) | `STANDARD` selected (the default): *"Use this one. Pixel-perfect, and about 180 MB for a 5-minute countdown. Opens in CapCut and other editing software. Not tested in ProPresenter."* `PRORES` selected: *"Only if you are putting the file straight into ProPresenter without editing it first. Bigger — about 530 MB for a 5-minute countdown."* Copy leads with a RECOMMENDATION, not a description: an earlier draft described both neutrally and the owner read it in the browser and still could not tell which to pick. Figures are 5-minute, not 15-minute, because five is the common case and 1.5 MB vs 180 MB lands harder than gigabytes. Never imply STANDARD is lower quality — it is measurably the opposite (qtrle is pixel-exact lossless, max channel error 0; ProRes 4444 is max channel error 1 of 255). |
+| Usage hint (shown only while Transparent is on, above the format pair) | *"Only for putting the timer over your own footage in an editor. For a timer that goes straight on screen, leave this off — the normal export is 1.5 MB instead of 180 MB."* Stops someone reaching for transparency on a Sunday when they only want a timer on screen. |
+| Format intro line | *"Both save a .mov with a see-through background."* |
+| Technical line (`id="timer-transparent-tech"`, `.hint-tech`, subordinate styling) | `STANDARD`: *".mov — QuickTime Animation (RLE), argb, lossless"*. `PRORES`: *".mov — Apple ProRes 4444, yuva444p12le"*. Requested by the owner so an editor can Google the format or check compatibility; deliberately subdued so a volunteer's eye skips it. Shows the PROBED pixfmt, not the encode-time request. |
+| Why-this-exists note (`id="timer-transparent-why"`, `.transparent-why-note` callout, **PRORES only**) | *"Why this exists: ProPresenter can play a .mov with a see-through background. Put your own video or image on a layer underneath and it shows through behind the numbers — no editing, and no green screen to key out."* This is the ONLY place the ProPresenter claim is warranted, because ProRes 4444 is in ProPresenter's documented format list and qtrle is not. Never shown for STANDARD. |
+| Preview caption + export button | Both hardcode MP4 in the markup and must be corrected while Transparent is on: `#timer-spec-line` reads *"1920x1080 - 30fps - .mov with transparency"* and `#timer-export` reads `EXPORT MOV`. Timer tile only. Both were missed by DOM-level testing and caught by looking at the tile. |
 | Image strip, `+ ADD IMAGE`, SECONDS PER IMAGE, DIM, BLUR | Hidden while Transparent is on — identical rule to Green screen today, just extended to cover the new toggle too. |
 | `timer-bg-empty` hint | While Transparent is on: *"Transparent — no background at all. Overlay this file directly on your own video, no keying needed."* (Contrasts on purpose with green screen's own hint, which is the one place this app has ever had to explain keying.) |
 | Preview canvas | A checkerboard fill instead of a flat colour, digits/ring/bar drawn on top exactly as usual, no digit shadow halo. **The checkerboard is a preview-only convention** (the universal "this is transparent" signal used by every image/video editor) — it is never written into an exported frame; see Display rules. |
@@ -124,17 +164,17 @@ changes. A ProRes export is *large*, not *slow to compute*.
 {"type": "timer", "options": {
   "backgrounds": [],
   "green_screen": false,
-  "transparent": "prores"
+  "transparent": "qtrle"
 }}
 ```
 
 One new optional key, valid in **both** modes, sitting alongside
 `green_screen` in the same Background group:
 
-- `transparent`: `false` (default) or one of `"prores"` / `"webm"`. Not a
+- `transparent`: `false` (default) or one of `"qtrle"` / `"prores"`. Not a
   plain bool, because there is no single "on" — only a specific format —
   so it is validated against the allowed strings, not `isinstance(x, bool)`.
-  Any other value → *`Transparent background must be "prores", "webm", or false.`*
+  Any other value → *`Transparent background must be "qtrle", "prores", or false.`*
 - `transparent` truthy **and** `green_screen` truthy together →
   *`Choose either green screen or a transparent background, not both.`*
   (This is a real boundary check, not just a UI nicety — the frontend
@@ -154,18 +194,21 @@ One new optional key, valid in **both** modes, sitting alongside
   encoder actually knows how to build.
 - Filename: the Background group's descriptor suffix becomes a single
   three-way choice instead of the current on/off (`_green` or nothing) —
-  `_alpha_prores` or `_alpha_webm` or `_green` or nothing, in both
+  `_alpha_qtrle` or `_alpha_prores` or `_green` or nothing, in both
   `render_timer` and `_render_clock`
-  (`timer_5m00s_classic_alpha_prores_<stamp>.mov`,
-  `clock_1959-50_30s_ring_alpha_webm_<stamp>.webm`). Exactly one of these
+  (`timer_5m00s_classic_alpha_qtrle_<stamp>.mov`,
+  `clock_1959-50_30s_ring_alpha_prores_<stamp>.mov`). Exactly one of these
   can ever be true, since `green_screen` + `transparent` together is
   rejected above.
-- File extension follows the format: `.mov` for `"prores"`, `.webm` for
-  `"webm"`, `.mp4` for everything else (unchanged). `render/encoder.py`'s
-  `export_path(prefix, descriptor, ext=".mp4")` already takes an `ext`
-  argument for exactly this (it exists today for the QR tile's still PNG)
-  — no change needed to `export_path` itself, only to what the timer
-  renderer passes for `ext`.
+- File extension: **both formats now share one extension.** `.mov` for
+  either `"qtrle"` or `"prores"`, `.mp4` for everything else (unchanged) —
+  a simplification the original ProRes/WebM plan did not have.
+  `render/encoder.py`'s `export_path(prefix, descriptor, ext=".mp4")`
+  already takes an `ext` argument for exactly this (it exists today for
+  the QR tile's still PNG) — no change needed to `export_path` itself.
+  The renderer still looks `ext` up from `ALPHA_FORMATS[transparent]["ext"]`
+  rather than hardcoding `.mov`, so a hypothetical future third alpha
+  format in a different container would need no change here either.
 
 ## Renderer (`render/timer.py`)
 
@@ -285,10 +328,10 @@ def _bg_descriptor_suffix(options):
     green_screen + transparent together — so this is a plain if/elif
     chain, not independent flags that need combining."""
     transparent = options.get("transparent")
+    if transparent == "qtrle":
+        return "_alpha_qtrle"
     if transparent == "prores":
         return "_alpha_prores"
-    if transparent == "webm":
-        return "_alpha_webm"
     if options.get("green_screen"):
         return "_green"
     return ""
@@ -320,33 +363,38 @@ That is the *entire* renderer-side change needed to reach the encoder;
 ```python
 # ---------------------------------------------------------- alpha export
 # docs/specs/alpha-export.md. A FIXED codec per format -- chosen for what
-# ProPresenter/CapCut can open, never probed or picked for speed -- so
-# this is a completely separate table from _CODEC_FLAGS above, which
+# ProPresenter/CapCut can actually open (confirmed by dropping real
+# exported clips into CapCut; see Why -- documentation alone said WebM
+# would work here and it does not), never probed or picked for speed --
+# so this is a completely separate table from _CODEC_FLAGS above, which
 # exists ONLY to pick the fastest available H.264 encoder.
 ALPHA_FORMATS = {
+    "qtrle": {
+        # QuickTime Animation (RLE) -- lossless. The default: CapCut-
+        # confirmed transparent, and roughly a third the size of ProRes
+        # on real timer content (see Why) because RLE compresses the
+        # plate/track's large flat runs far harder than ProRes's
+        # intra-frame DCT does. NOT on ProPresenter's documented
+        # supported-format list (H.264, HEVC, ProRes variants, HAP), and
+        # nobody has tested it there -- neither this comment nor the UI
+        # copy below may claim it works in ProPresenter.
+        "vcodec": "qtrle",
+        "flags": [],
+        "pix_fmt": "argb",
+        "container": "mov",
+        "ext": ".mov",
+        "movflags": True,
+    },
     "prores": {
+        # The maximum-compatibility choice: CapCut-confirmed AND on
+        # ProPresenter's documented supported-format list. Pick this one
+        # whenever the file is going straight into ProPresenter.
         "vcodec": "prores_ks",
         "flags": ["-profile:v", "4444"],
         "pix_fmt": "yuva444p10le",
         "container": "mov",
         "ext": ".mov",
         "movflags": True,   # meaningful for a mov/mp4-family muxer
-    },
-    "webm": {
-        "vcodec": "libvpx-vp9",
-        # Disables VP9 alt-ref/lookahead frames. Documented, widely-hit
-        # failure mode: an alt-ref frame has no paired alpha frame, and
-        # on longer real content (unlike this spec's short verification
-        # clips, which never triggered it) that can corrupt the alpha
-        # channel on exactly those frames. Costs nothing measurable on
-        # the file sizes this spec is built around.
-        "flags": ["-auto-alt-ref", "0"],
-        "pix_fmt": "yuva420p",
-        "container": "webm",
-        "ext": ".webm",
-        "movflags": False,  # -movflags is a mov/mp4-muxer option; webm
-                            # ignores it, so it is simply not passed
-                            # rather than passed-and-ignored
     },
 }
 ```
@@ -383,12 +431,12 @@ def __init__(self, out_path, input_fps, width=WIDTH, height=HEIGHT,
         # pick_codec()'s Windows candidates (h264_nvenc/h264_qsv/
         # h264_amf) are H.264-only hardware encoders that cannot
         # produce alpha at all, _CODEC_FLAGS has no entry for
-        # prores_ks/libvpx-vp9 (a lookup would KeyError), and probing
+        # prores_ks/qtrle (a lookup would KeyError), and probing
         # costs a real subprocess spawn (up to a 20s timeout) to
         # "discover" a choice that was never in question -- there is no
-        # GPU ProRes/VP9 encoder to find on a volunteer's laptop, and
-        # this path picks its codec from the format the operator chose,
-        # not from what is fastest.
+        # GPU-accelerated ProRes or RLE encoder to find on a volunteer's
+        # laptop, and this path picks its codec from the format the
+        # operator chose, not from what is fastest.
         spec = ALPHA_FORMATS[alpha_format]
         in_pix_fmt = "rgba"
         codec_args = ["-vcodec", spec["vcodec"], *spec["flags"],
@@ -458,12 +506,15 @@ def encode_parallel(out_path, input_fps, total_frames, make_frame,
         ...   # UNCHANGED below this line
 ```
 
-### Verified during spec research (not in the original brief — read before implementing)
+### Verified during spec research (read before implementing)
 
-Both codecs were actually piped 1920x1080-shaped RGBA test frames through
-*this repo's bundled* ffmpeg binary while researching this spec (not just
-confirmed present by `-encoders`), with two results worth knowing before
-writing the smoke checks below:
+Both alpha-capable codecs were piped RGBA test frames through *this
+repo's bundled* ffmpeg binary before being written into this spec (not
+just confirmed present by `-encoders`) — ProRes at the original
+1920×1080 frame shape while first researching this spec, `qtrle` at a
+smaller synthetic shape while revising it after real CapCut testing ruled
+out WebM (see Why) — with results worth knowing before writing the
+smoke checks below:
 
 1. **ProRes round-trips through ffmpeg's own decoder correctly, but not at
    the pixel format you asked for.** Encoding with
@@ -474,24 +525,29 @@ writing the smoke checks below:
    12-bit internally regardless of the 10-bit input request. Re-extracting
    a frame (`-pix_fmt rgba`) and reading it back with Pillow reproduced
    the exact source pixels, including fractional alpha values, with only
-   trivial YUV rounding. **Smoke checks must assert the probed pixfmt as
+   trivial YUV rounding (a 50%-alpha test pixel came back at 129, not
+   128). **Smoke checks must assert the probed pixfmt as
    `"yuva444p12le"`, not the `-pix_fmt` value passed on encode.**
-2. **The bundled ffmpeg cannot decode VP9-in-WebM alpha back out through
-   its own CLI, even from a correctly-encoded file.** Probing an encoded
-   WebM with `ffmpeg -i` shows the muxer *did* write the correct
-   `alpha_mode : 1` container tag, but every attempt to re-extract a
-   frame as RGBA (with or without `-auto-alt-ref 0`, with or without an
-   explicit bitrate) came back with alpha = 255 everywhere — a false
-   negative, not a real bug: the **same file**, opened in a real
-   standards-compliant decoder (Chrome, via a `<video>` element sampled
-   pixel-by-pixel with `drawImage`+`getImageData`), reproduced the exact
-   source alpha values, fractional edges included. This is a known,
-   documented limitation of ffmpeg's own VP9 alpha *decoder* (encoding
-   support is fine); it is not something a code change in this app can
-   fix, and it is not evidence the feature is broken. **Smoke cannot
-   verify WebM alpha by extracting a frame with ffmpeg** — see Smoke
-   checks below for what it checks instead, and Done means for how a
-   human actually confirms it.
+2. **`qtrle` round-trips through ffmpeg's own decoder exactly, at the
+   pixel format you asked for, with no rounding at all.** Encoding with
+   `-pix_fmt argb` (the only alpha-capable pix_fmt `qtrle` accepts —
+   confirmed via `ffmpeg -h encoder=qtrle`, whose full supported list is
+   `rgb24 rgb555be argb gray`) and re-probing the file reports the stream
+   as **`argb`**, matching the encode request exactly — `qtrle` has no
+   separate internal bit depth to round to, the way ProRes does above.
+   Confirmed with real RGBA test frames (a 64×32 synthetic frame with a
+   fully transparent band, a 50%-alpha band, and a fully opaque band —
+   smaller than the 1920×1080 shape the original ProRes/WebM research
+   used, but the same codec-level round trip, so the conclusion
+   transfers) piped through this repo's bundled ffmpeg while revising
+   this spec: re-extracting a frame (`-pix_fmt rgba`) and reading it back
+   with Pillow reproduced all three alpha values byte-for-byte — 0, 128,
+   and 255 all came back exact, because RLE is lossless and has no YUV
+   pipeline to round through. **Smoke checks must assert the probed
+   pixfmt as `"argb"` for `qtrle`.** Unlike the WebM plan this revision
+   replaces, both alpha formats now round-trip alpha correctly through
+   this ffmpeg build's own decoder, so smoke can pixel-verify both — see
+   Smoke checks below (including a `probe()` regex gap this surfaced).
 
 ## Byte-identical guarantee
 
@@ -528,10 +584,10 @@ more fixed values:
 ```python
 def _timer_props(options):
     transparent = options.get("transparent")
-    if transparent == "prores":
+    if transparent == "qtrle":
+        bg = "alpha_qtrle"
+    elif transparent == "prores":
         bg = "alpha_prores"
-    elif transparent == "webm":
-        bg = "alpha_webm"
     elif options.get("green_screen"):
         bg = "green"
     else:
@@ -550,11 +606,12 @@ Add to the existing `check_clock_validation()` (it already validates
 `green_screen` right next to where these belong, reusing its `countdown`/
 `clock` fixtures and its local `expect_error` helper):
 
-- `transparent="prores"` and `transparent="webm"`, each in both modes:
+- `transparent="qtrle"` and `transparent="prores"`, each in both modes:
   `backgrounds` normalises to `[]` even with a bogus id supplied alongside.
 - `transparent` omitted defaults to `False`.
-- A bad value (e.g. `"png"`) is rejected with the exact message.
-- `transparent="prores"` **and** `green_screen=True` together is rejected
+- A bad value (e.g. `"png"`) is rejected with the exact message:
+  *"Transparent background must be "qtrle", "prores", or false."*
+- `transparent="qtrle"` **and** `green_screen=True` together is rejected
   with *"Choose either green screen or a transparent background, not
   both."*
 
@@ -562,9 +619,11 @@ Add a new `check_alpha_export()` (mirroring `check_green_screen()`'s shape
 and called from `main()` right after it):
 
 1. **`_plates()` returns a transparent RGBA plate.**
-   `_plates({"transparent": "prores"}, "ring", (1, 2, 3))` returns exactly
+   `_plates({"transparent": "qtrle"}, "ring", (1, 2, 3))` returns exactly
    one plate, mode `"RGBA"`, and pixel `(10, 10)` (well outside the ring)
-   reads `(0, 0, 0, 0)`.
+   reads `(0, 0, 0, 0)`. (Which format string is passed does not matter
+   to `_plates()` — it only ever checks truthiness — so this does not
+   need a second case for `"prores"`.)
 2. **The `_paste_digits` alpha fix, tested directly (not through a full
    render), as a regression guard for the exact bug described above:**
    build a fully-opaque `(35, 38, 43, 255)` RGBA square (stands in for an
@@ -579,27 +638,32 @@ and called from `main()` right after it):
    **and** at least one strictly-between pixel — proving the glyph is
    anti-aliased, not a hard cutout, exactly the property this whole
    feature depends on.
-4. **A real 6 s classic countdown, `transparent: "prores"`:** filename
+4. **A real 6 s classic countdown, `transparent: "qtrle"`:** filename ends
+   `.mov` and contains `_alpha_qtrle`; `verify(...)` extended with
+   `expected_codec="qtrle"`, `expected_pixfmt="argb"` (confirmed by
+   actually probing an encode while researching this revision — see the
+   verified-during-research note in the Encoder section). Extract frame 0
+   with the bundled ffmpeg exactly like `check_green_screen()` does
+   (`-frames:v 1 -pix_fmt rgba`, so the extracted PNG keeps its alpha
+   band), and assert: a background-area pixel is fully transparent
+   (`alpha == 0`); a digit-interior pixel is fully opaque
+   (`alpha >= 250`); **and** at least one pixel along a digit's edge
+   reads a strictly-between alpha value (`0 < alpha < 255`) — the same
+   anti-aliasing property check 3 proves in isolation, now proven to
+   survive a real encode-and-decode round trip. This is a genuine
+   pixel-level proof, not a container-tag inspection, because `qtrle`
+   round-trips alpha through this ffmpeg build's own decoder correctly
+   (verified in the Encoder section above) — unlike the WebM path this
+   revision removes.
+5. **A real 6 s classic countdown, `transparent: "prores"`:** filename
    ends `.mov` and contains `_alpha_prores`; `verify(...)` extended with
    `expected_codec="prores"`, `expected_pixfmt="yuva444p12le"` (see the
    verified-during-research note above — **not** `"yuva444p10le"`, that is
-   the encode-time request, not the probed result); extract frame 0 with
-   the bundled ffmpeg exactly like `check_green_screen()` does, and assert
-   a background-area pixel is fully transparent (`alpha == 0`) while a
-   digit-interior pixel is fully opaque (`alpha >= 250`) — ProRes alpha
-   round-trips correctly through this ffmpeg build, verified above, so
-   this pixel check is trustworthy.
-5. **A real 6 s classic countdown, `transparent: "webm"`:** filename ends
-   `.webm` and contains `_alpha_webm`; `verify(...)` with
-   `expected_codec="vp9"`. **Do not** extend this to a pixel-alpha check
-   via ffmpeg extraction — per the verified note above, this ffmpeg
-   build's own decoder cannot read VP9 alpha back out even from a
-   correctly-encoded file, so that assertion would fail on *correct* code
-   and is not a real signal. Instead assert the muxer's own container tag
-   is present: run `ffmpeg -i <path>` (same subprocess shape `probe()`
-   already uses) and check the literal text `"alpha_mode"` appears in
-   stderr — that confirms the encoder wrote the right signal without
-   depending on this ffmpeg build's decoder being able to read it back.
+   the encode-time request, not the probed result). Same three pixel
+   assertions as check 4 above (transparent background, opaque interior,
+   fractional edge) — ProRes alpha round-trips correctly through this
+   ffmpeg build too, verified above, so this pixel check is trustworthy
+   here as well.
 6. **Green screen output is unchanged.** No new check needed — the
    existing `check_green_screen()` must keep passing unmodified; that *is*
    the regression proof for this bullet.
@@ -623,9 +687,20 @@ def verify(name, filename, expected_duration, expected_codec="h264",
 
 Note the check **labels** must interpolate the expected value too (not just
 the assertion) — otherwise a passing ProRes check prints a label claiming
-`yuv420p` while actually having checked `yuva444p12le`. `probe()`'s own
-regex (`yuv\w+|rgb\w+`) needs no change at all — verified directly, it
-already captures `"yuva444p12le"` and `"yuv420p"` correctly as-is.
+`yuv420p` while actually having checked `yuva444p12le`.
+
+**Also required, found while revising this spec, not in the original
+brief:** `probe()`'s own regex (`yuv\w+|rgb\w+`) never matches `"argb"` —
+verified directly: `re.search(r"yuv\w+|rgb\w+", "argb(progressive)")`
+returns `None`, because `"argb"` doesn't start with `"yuv"`, and the
+`"rgb"` inside it has nothing after it for `\w+` to require (WebM's
+`yuva420p` never hit this gap, only because it happened to start with
+`"yuv"`). Add a third alternative — `r"yuv\w+|rgb\w+|argb\w*"` — verified
+to still match `"yuva444p12le"` and `"yuv420p"` exactly as before, and to
+now also match `"argb"`. Without this fix, check 4's
+`expected_pixfmt="argb"` assertion fails on correct encoder output,
+because `probe()` can't see its own correct answer, not because anything
+is actually wrong.
 
 ## Files & ownership (agents edit ONLY their own files)
 
@@ -645,15 +720,17 @@ already captures `"yuva444p12le"` and `"yuv420p"` correctly as-is.
 - `app.py`: `_timer_props()`'s two new `bg` values. **Also required, found
   while reading this file, not in the original brief:**
   `EXPORT_FILENAME_RE = re.compile(r"[^/\\\x00-\x1f]{1,200}\.(mp4|png|mp3)")`
-  only matches `mp4`/`png`/`mp3` — without adding `mov` and `webm` to that
+  only matches `mp4`/`png`/`mp3` — without adding `mov` to that
   alternation, "Reveal in Finder"/"Show file" (`/api/reveal`) will reject
   every alpha export with *"That does not look like the name of an
-  exported file."* even though the file rendered successfully. This is the
-  only other file in the app that hardcodes the timer's export extensions.
+  exported file."* even though the file rendered successfully. Both alpha
+  formats share this one extension, so this is a one-item addition, not
+  two. This is the only other file in the app that hardcodes the timer's
+  export extensions.
 - `README.md`: one clause in the Timer bullet, e.g. "...or **TRANSPARENT**
-  for a real alpha-channel export — ProRes 4444 (`.mov`) for ProPresenter,
-  or the much smaller WebM VP9 (`.webm`) for CapCut and other editors — no
-  keying required."
+  for a real alpha-channel export — a smaller `.mov` for CapCut and other
+  editors, or the larger ProRes 4444 `.mov` for documented ProPresenter
+  compatibility — no keying required."
 
 **Encoder agent** — `render/encoder.py`.
 - `ALPHA_FORMATS`, the `FrameEncoder.__init__`/`add_frame` changes, the
@@ -665,9 +742,11 @@ already captures `"yuva444p12le"` and `"yuv420p"` correctly as-is.
 - `index.html`: the `TRANSPARENT` button (`id="timer-bg-transparent"`,
   same shape as `timer-bg-green`) placed after it in `.bg-strip-wrap`; the
   format `seg-group` (`name="timer-transparent-format"`, ids
-  `timer-transparent-format-prores`/`-webm`, labels `PROPRESENTER`/
-  `CAPCUT & EDITORS`) in a group hidden unless Transparent is on; a hint
-  paragraph (`id="timer-transparent-hint"`) for the live size/format copy.
+  `timer-transparent-format-qtrle`/`-prores` — `qtrle`'s radio `checked`
+  by default, matching the Behaviour table's "default the first" rule —
+  labels `STANDARD`/`PRORES`) in a group hidden unless
+  Transparent is on; a hint paragraph (`id="timer-transparent-hint"`) for
+  the live size/format copy.
 - `timer.js`:
   - `applyTimerBg()`: extend every place that currently checks `green` to
     check `green || transparent`, plus show/hide the new format
@@ -675,8 +754,8 @@ already captures `"yuva444p12le"` and `"yuv420p"` correctly as-is.
   - `validateTimerBg()`: the stale-id-count bypass extends to
     `green || transparent`, same reasoning as today's green-only version.
   - `readTimer()`: read `timer-bg-transparent`'s `aria-pressed` and the
-    checked format radio into `t.transparent` (`false`/`"prores"`/
-    `"webm"`); `backgrounds` becomes `[]` when transparent OR green is on.
+    checked format radio into `t.transparent` (`false`/`"qtrle"`/
+    `"prores"`); `backgrounds` becomes `[]` when transparent OR green is on.
   - `timerPayload()`: `transparent: t.transparent` alongside
     `green_screen: t.greenScreen` in both mode branches.
   - `drawTimerBackground(ctx, t)`: new first check, before the green
@@ -704,7 +783,9 @@ already captures `"yuva444p12le"` and `"yuv420p"` correctly as-is.
 **Smoke agent** — `scripts/smoke.py`.
 - Everything in the Smoke checks section above: the `check_clock_validation()`
   additions, the new `check_alpha_export()` (called from `main()` right
-  after `check_green_screen()`), and the `verify()` signature change.
+  after `check_green_screen()`), the `verify()` signature change, and the
+  `probe()` regex fix (also required, found while revising this spec —
+  see Smoke checks section).
 
 ## Do not
 
@@ -718,19 +799,22 @@ already captures `"yuva444p12le"` and `"yuv420p"` correctly as-is.
 - Do not bake the JS preview's checkerboard into anything that reaches the
   renderer or the encoder — it is drawn fresh on canvas, every redraw,
   client-side only.
-- Do not add bitrate/CRF/quality flags to either `ALPHA_FORMATS` entry
-  beyond what is specified above — the measured file sizes in this spec's
-  Why section assume ffmpeg's own defaults for these two encoders; tuning
-  them is a follow-up with its own measurements, not part of this spec.
+- Do not add bitrate/CRF/quality flags to either `ALPHA_FORMATS` entry —
+  the measured file sizes in this spec's Why section assume ffmpeg's own
+  defaults for both encoders. For ProRes specifically, this was actually
+  tried and measured: `-qscale:v` 4 / 11 / 20 produced 1641 / 1588 / 1588
+  MB against the ~1600 MB default, because profile 4444 is intra-only and
+  already near-lossless — there is no smaller-but-still-correct ProRes to
+  find here, so do not spend time looking for one.
 - Do not add a third alpha format, a colour picker for green screen, or a
   resolution change — a 4K export does not fix the problem this feature
   fixes (see Why) and was never on the table.
-- Do not try to make the WebM smoke check assert on ffmpeg-decoded pixel
-  alpha. That is a documented limitation of this ffmpeg build's own VP9
-  decoder, not a bug in this app; "fixing" it by changing encode flags
-  until the ffmpeg round-trip check passes would be chasing a phantom and
-  could easily make the real (encoder-side) behaviour worse while the
-  check goes green.
+- Do not claim or imply `qtrle` works in ProPresenter, anywhere — code
+  comments, UI copy, or `README.md`. It is unverified there, full stop;
+  ProRes is the documented-safe choice for anyone dropping a file straight
+  into ProPresenter. If someone later actually tests `qtrle` in
+  ProPresenter, that is a follow-up spec update with its own verification,
+  not an assumption to bake in now.
 - Do not touch the spinner, QR, motion-bg, or scoreboard tiles.
 - Do not add dependencies — both codecs are already bundled.
 - Do not bump `version.py`, edit `whatsnew.py`, or tag — the orchestrator
@@ -746,17 +830,19 @@ already captures `"yuva444p12le"` and `"yuv420p"` correctly as-is.
   passes unmodified.
 - `.venv/bin/python -m pyflakes *.py render/*.py scripts/*.py` is clean.
 - Orchestrator/reviewer: the byte-identical proof for a no-`transparent`
-  6 s countdown in all three styles (recipe above); a real ProRes render
-  viewed as extracted frames (classic, ring, clock) over a contrasting
-  background in something other than ffmpeg; a real WebM render **opened
-  in an actual player that supports WebM alpha** (e.g. a `<video>` element
-  in a real browser tab, sampled with canvas `getImageData`, or dropped
-  into CapCut/Chrome directly) rather than "checked" through ffmpeg's own
-  CLI, which cannot see it — do not sign off on WebM alpha from a
-  ffmpeg-only check, per the verified limitation above.
+  6 s countdown in all three styles (recipe above); a real `qtrle` render
+  **and** a real ProRes render, each viewed as extracted frames (classic,
+  ring, clock) over a contrasting background in something other than
+  ffmpeg. No external player needed for either format — unlike the WebM
+  plan this revision removes, both formats round-trip alpha correctly
+  through this ffmpeg build's own decoder (verified in the Encoder
+  section), so extracted frames are trustworthy evidence on their own.
 - The UI toggled in the browser: GREEN SCREEN and TRANSPARENT correctly
-  exclude each other, the format picker and size hint update live, the
-  checkerboard preview matches what a transparent frame should look like.
-- `EXPORT_FILENAME_RE` confirmed to accept a real `.mov`/`.webm` filename
-  by actually clicking "Reveal in Finder"/"Show file" on one of each in a
-  running app, not just by reading the regex.
+  exclude each other, the format picker and size hint update live
+  (including the `qtrle` hint's "not yet confirmed in ProPresenter" line),
+  the checkerboard preview matches what a transparent frame should look
+  like.
+- `EXPORT_FILENAME_RE` confirmed to accept a real `.mov` filename by
+  actually clicking "Reveal in Finder"/"Show file" on an alpha export in a
+  running app, not just by reading the regex — one check covers both
+  formats, since `qtrle` and `prores` now share the same extension.

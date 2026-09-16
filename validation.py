@@ -11,7 +11,7 @@ import os
 import re
 from urllib.parse import urlsplit
 
-from render.encoder import UPLOADS_DIR
+from render.encoder import ALPHA_FORMATS, UPLOADS_DIR
 from render.qr import POSITIONS, QR_STYLES
 from render.timer import CLOCK_STYLES
 from backgrounds import (
@@ -42,6 +42,11 @@ def _one_of(value, allowed, default):
 HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
 TIMER_STYLES = ("classic", "ring", "bar")
+# The only legal `transparent` strings (docs/specs/alpha-export.md) — drawn
+# from render/encoder.py's ALPHA_FORMATS keys, never duplicated here, so
+# this can't drift out of sync with what the encoder actually knows how to
+# build. ("qtrle", "prores") today.
+TRANSPARENT_FORMATS = tuple(ALPHA_FORMATS)
 MILLIS_MAX_SECONDS = 1800        # countdown ceiling when milliseconds are on
 CLOCK_FORMATS = ("12h", "24h")
 # HH:MM:SS, 24-hour, zero-padded — the exact shape the "Shows as ..." hint
@@ -357,21 +362,43 @@ def _timer_background_options(options):
     reason: when it's true the normalised "backgrounds" is forced to []
     WITHOUT ever calling _backgrounds_field(), so a stale/deleted image id
     left in a hidden set can't block a green export.
+
+    transparent (docs/specs/alpha-export.md) is a third, mutually-
+    exclusive Background choice: `False` (default) or one of
+    TRANSPARENT_FORMATS. It is deliberately checked by exact membership,
+    not `isinstance(x, bool)` — there is no single "on", only a specific
+    format, so a stray `True` must be rejected exactly like a bad string
+    rather than silently accepted as some default format. Like
+    green_screen, a truthy value forces "backgrounds" to [] without ever
+    calling _backgrounds_field(), so a stale/deleted image id can't block
+    a transparent export either.
     """
     green_screen = options.get("green_screen", False)
     if not isinstance(green_screen, bool):
         raise ValidationError("Green screen must be true or false.")
+    transparent = options.get("transparent", False)
+    # `is not False` (not `!=`) so a JSON 0 can't slip through as if it
+    # were the default off-state the way `0 == False` would let it.
+    if transparent is not False and transparent not in TRANSPARENT_FORMATS:
+        raise ValidationError(
+            'Transparent background must be "qtrle", "prores", or false.')
+    if green_screen and transparent:
+        raise ValidationError(
+            "Choose either green screen or a transparent background, "
+            "not both.")
     bg_dim = _int_field(options, "bg_dim", 0, 80, 45, "Dim")
     bg_blur = options.get("bg_blur", False)
     if not isinstance(bg_blur, bool):
         raise ValidationError("Blur must be true or false.")
     return {
-        "backgrounds": [] if green_screen else _backgrounds_field(options),
+        "backgrounds": ([] if (green_screen or transparent)
+                        else _backgrounds_field(options)),
         "bg_seconds": _int_field(
             options, "bg_seconds", 2, 120, 10, "Seconds per image"),
         "bg_dim": bg_dim,
         "bg_blur": bg_blur,
         "green_screen": green_screen,
+        "transparent": transparent,
     }
 
 

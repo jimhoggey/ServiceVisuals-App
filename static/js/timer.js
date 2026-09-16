@@ -75,10 +75,33 @@
     ctx.restore();
   }
 
+  // Transparent export (spec: docs/specs/alpha-export.md): the checkerboard
+  // is a PREVIEW-ONLY convention — the universal "this is transparent"
+  // signal used by every image/video editor. The canvas 2D context already
+  // composites correctly by default (no JS equivalent of the Pillow bug
+  // the renderer works around), so this needs no compositing logic, only
+  // the fill itself, drawn fresh every redraw. NEVER baked into anything
+  // the renderer produces — the real plate is plain RGBA(0, 0, 0, 0)
+  // (render/timer.py's _plates()).
+  function drawCheckerboard(ctx) {
+    var size = 20;
+    for (var y = 0; y < PH; y += size) {
+      for (var x = 0; x < PW; x += size) {
+        var even = (Math.round(x / size) + Math.round(y / size)) % 2 === 0;
+        ctx.fillStyle = even ? "#ffffff" : "#cccccc";
+        ctx.fillRect(x, y, size, size);
+      }
+    }
+  }
+
   // With no images this is exactly paintBackground(), so the empty-set
   // preview never changes. With one, draw the first image (only the first —
   // the preview always shows the opening frame, cycling is video-only).
   function drawTimerBackground(ctx, t) {
+    // Transparent (spec: docs/specs/alpha-export.md): checked first, before
+    // green — the two are mutually exclusive by construction (the click
+    // handlers below never let both read pressed at once).
+    if (t.transparent) { drawCheckerboard(ctx); return; }
     // Green screen (spec: docs/specs/green-screen.md): a flat chroma plate,
     // no vignette/dim/blur — the style's track and digits are painted on
     // top of it exactly as with any other background, by the caller.
@@ -289,26 +312,120 @@
 
   function applyTimerBg() {
     var green = $("timer-bg-green").getAttribute("aria-pressed") === "true";
+    var transparent = $("timer-bg-transparent").getAttribute("aria-pressed") === "true";
+    // Transparent (spec: docs/specs/alpha-export.md) hides the image UI for
+    // the same reason green screen does — there is no background to pick
+    // images for — so every place below that used to check `green` alone
+    // now checks either one.
+    var hideImages = green || transparent;
     var multi = timerBg.ids.length >= 2;
     var any = timerBg.ids.length >= 1;
     // Green screen (spec: docs/specs/green-screen.md): the whole image UI
     // hides while green is on — timerBg.ids itself is untouched, so
     // turning green back off restores the strip exactly as it was.
-    $("timer-bg-strip").hidden = green;
-    $("timer-bg-add").hidden = green;
+    $("timer-bg-strip").hidden = hideImages;
+    $("timer-bg-add").hidden = hideImages;
     // The picker's own trigger just went hidden above; if it was left open
-    // from before green was switched on, close it rather than leave an
-    // orphaned panel with no visible way back to it.
-    if (green && !$("timer-bg-picker").hidden) closeTimerBgPicker();
-    $("timer-bg-seconds-field").hidden = green || !multi;
-    $("timer-bg-seconds-hint").hidden = green || !multi;
+    // from before green/transparent was switched on, close it rather than
+    // leave an orphaned panel with no visible way back to it.
+    if (hideImages && !$("timer-bg-picker").hidden) closeTimerBgPicker();
+    $("timer-bg-seconds-field").hidden = hideImages || !multi;
+    $("timer-bg-seconds-hint").hidden = hideImages || !multi;
     timerBgOptional().forEach(function (el) {
-      if (el) el.hidden = green || !any;
+      if (el) el.hidden = hideImages || !any;
     });
     $("timer-bg-dim-value").textContent = $("timer-bg-dim").value + "%";
 
+    // Usage hint under the TRANSPARENT toggle itself (copy review round 2,
+    // spec: docs/specs/alpha-export.md) — the owner asked which format to
+    // pick for a plain 5-minute timer, and the honest answer is "neither,
+    // leave this off", so this steers a volunteer away from reaching for
+    // Transparent on a normal Sunday timer before they ever see the
+    // format picker below.
+    $("timer-transparent-usage-hint").hidden = !transparent;
+
+    // Format picker + hint: STANDARD (qtrle) / PRORES (prores). Copy
+    // review round 2 of a coordinator-directed correction OVER the
+    // spec's original SMALLER FILE/MAXIMUM COMPATIBILITY wording (spec:
+    // docs/specs/alpha-export.md) — round 1 didn't say which button was
+    // actually ProRes; round 2 makes the recommendation directive rather
+    // than descriptive, and switches the size figures from a 15-minute
+    // to a 5-minute countdown (the realistic common case). Both formats
+    // measured side by side against source frames (qtrle pixel-exact;
+    // ProRes 4444 max channel error 1/255, invisible), so neither hint
+    // may imply the smaller file is lower quality — "Pixel-perfect" on
+    // STANDARD is literally true, not marketing. The qtrle/prores API
+    // value tokens this reads from are unchanged — display copy only.
+    // Round 3 adds a technical line (container/codec/pixel format) under
+    // each recommendation for the rare volunteer who is also the editor
+    // and wants to verify compatibility themselves — timer-transparent-
+    // tech below, a separate and deliberately more subdued element (see
+    // .hint-tech in style.css) so it never competes with the plain-
+    // English recommendation above it.
+    $("timer-transparent-format-intro").hidden = !transparent;
+    $("timer-transparent-format-group").hidden = !transparent;
+    var transparentHint = $("timer-transparent-hint");
+    var transparentTech = $("timer-transparent-tech");
+    var transparentWhy = $("timer-transparent-why");
+    transparentHint.hidden = !transparent;
+    transparentTech.hidden = !transparent;
+    if (transparent) {
+      var formatEl = document.querySelector('input[name="timer-transparent-format"]:checked');
+      var isProres = !!formatEl && formatEl.value === "prores";
+      // qtrle is unverified in ProPresenter (spec "Do not claim or imply
+      // qtrle works in ProPresenter, anywhere") — kept exactly, per the
+      // owner: this is the honest status, not to be softened to "may not
+      // work" or dropped.
+      transparentHint.textContent = isProres ?
+          "Only if you are putting the file straight into ProPresenter " +
+          "without editing it first. Bigger — about 530 MB for a " +
+          "5-minute countdown." :
+          "Use this one. Pixel-perfect, and about 180 MB for a " +
+          "5-minute countdown. Opens in CapCut and other editing " +
+          "software. Not tested in ProPresenter.";
+      // Probed values, not the encode-time request: ProRes 4444 is
+      // requested at yuva444p10le but ffmpeg's own probe reports
+      // yuva444p12le (spec's Encoder section, "Verified during spec
+      // research" #1) — showing the request instead would look like a
+      // mismatch to anyone who inspects the file themselves in
+      // MediaInfo/ffprobe/an editor.
+      transparentTech.textContent = isProres ?
+          ".mov — Apple ProRes 4444, yuva444p12le" :
+          ".mov — QuickTime Animation (RLE), argb, lossless";
+      // ProRes only: the operator asked why this format exists at
+      // all, so the answer sits where they pick it. The
+      // ProPresenter claim is warranted HERE and only here --
+      // ProRes 4444 with alpha is in ProPresenter's documented
+      // format list, where qtrle is not.
+      transparentWhy.hidden = !isProres;
+    } else {
+      transparentWhy.hidden = true;
+    }
+
+    // The shared preview caption is hardcoded "H.264 MP4" across four
+    // tiles, which stops being true the moment TRANSPARENT is on --
+    // that export is a .mov. Correct it for this tile only.
+    var specLine = $("timer-spec-line");
+    if (specLine) {
+      specLine.textContent = transparent
+          ? "1920x1080 - 30fps - .mov with transparency"
+          : "1920x1080 - 30fps - H.264 MP4";
+    }
+    // Same problem on the button itself: it is hardcoded
+    // "EXPORT MP4" in the markup, and a transparent export is a
+    // .mov. Caught by looking at the tile, not by reading the DOM.
+    var exportBtn = $("timer-export");
+    if (exportBtn && !exportBusy["timer"]) {
+      exportBtn.textContent = transparent ? "EXPORT MOV"
+                                          : "EXPORT MP4";
+    }
+
     var emptyHint = $("timer-bg-empty");
-    if (green) {
+    if (transparent) {
+      emptyHint.hidden = false;
+      emptyHint.textContent = "Transparent — no background at all. " +
+          "Overlay this file directly on your own video, no keying needed.";
+    } else if (green) {
       emptyHint.hidden = false;
       emptyHint.textContent = "Solid green — key it out in your " +
           "video software to put your own background behind the numbers.";
@@ -324,12 +441,14 @@
     // _int_field ... label 'Seconds per image'", "bg_dim: _int_field ...
     // label 'Dim'").
     //
-    // Green screen (spec: docs/specs/green-screen.md): a stale id count
-    // in the hidden set (kept in memory so turning green off restores it)
-    // must never block a green export — the ids aren't even sent while
-    // green is on (readTimer() forces backgrounds to []).
+    // Green screen (spec: docs/specs/green-screen.md) and Transparent
+    // (spec: docs/specs/alpha-export.md): a stale id count in the hidden
+    // set (kept in memory so turning either off restores it) must never
+    // block an export — the ids aren't even sent while either is on
+    // (readTimer() forces backgrounds to []).
     var green = $("timer-bg-green").getAttribute("aria-pressed") === "true";
-    if (!green && timerBg.ids.length > 10) {
+    var transparent = $("timer-bg-transparent").getAttribute("aria-pressed") === "true";
+    if (!green && !transparent && timerBg.ids.length > 10) {
       return "A timer can use up to 10 background images.";
     }
     if (timerBg.ids.length >= 2) {
@@ -356,6 +475,12 @@
     // source of truth (the button's aria-pressed) instead of a JS flag
     // that could drift from the DOM.
     var green = $("timer-bg-green").getAttribute("aria-pressed") === "true";
+    // Transparent (spec: docs/specs/alpha-export.md): same one-source-of-
+    // truth reasoning as green above. Not a plain bool downstream —
+    // there is no single "on", only a specific format — so this reads
+    // straight to the format string, `false` when the toggle itself is off.
+    var transparentOn = $("timer-bg-transparent").getAttribute("aria-pressed") === "true";
+    var transparentFormatEl = document.querySelector('input[name="timer-transparent-format"]:checked');
     return {
       mode: modeEl ? modeEl.value : "countdown",
       minutes: toInt($("timer-minutes").value, 0),
@@ -374,15 +499,17 @@
       showMillis: $("timer-show-millis").checked,
       fixedFormat: $("timer-fixed-format").checked,
       greenScreen: green,
+      transparent: transparentOn ?
+          (transparentFormatEl ? transparentFormatEl.value : "qtrle") : false,
       // Backgrounds (spec: docs/specs/timer-backgrounds.md): valid in both
       // modes. `backgrounds` comes from JS state (timerBg.ids), not a DOM
       // field — the strip is built dynamically, there is no single input
-      // that holds the set. Forced to [] under green screen (spec:
-      // docs/specs/green-screen.md) so hasBg (backgrounds.length > 0,
-      // used throughout for the digit-shadow halo) and the export payload
-      // are both right by construction — no separate green-screen case
-      // needed anywhere downstream of this.
-      backgrounds: green ? [] : timerBg.ids.slice(),
+      // that holds the set. Forced to [] under green screen or transparent
+      // (spec: docs/specs/green-screen.md, docs/specs/alpha-export.md) so
+      // hasBg (backgrounds.length > 0, used throughout for the digit-
+      // shadow halo) and the export payload are both right by
+      // construction — no separate case needed anywhere downstream.
+      backgrounds: (green || transparentOn) ? [] : timerBg.ids.slice(),
       bgSeconds: toInt($("timer-bg-seconds").value, 10),
       bgDim: toInt($("timer-bg-dim").value, 45),
       bgBlur: $("timer-bg-blur").checked
@@ -871,7 +998,10 @@
           bg_blur: t.bgBlur,
           // Green screen (spec: docs/specs/green-screen.md): valid in
           // both modes, like the rest of the Background group.
-          green_screen: t.greenScreen
+          green_screen: t.greenScreen,
+          // Transparent (spec: docs/specs/alpha-export.md): alongside
+          // green_screen in the same Background group, both modes.
+          transparent: t.transparent
         }
       };
     }
@@ -894,7 +1024,9 @@
         bg_dim: t.bgDim,
         bg_blur: t.bgBlur,
         // Green screen (spec: docs/specs/green-screen.md).
-        green_screen: t.greenScreen
+        green_screen: t.greenScreen,
+        // Transparent (spec: docs/specs/alpha-export.md).
+        transparent: t.transparent
       }
     };
   }
@@ -941,6 +1073,18 @@
   $("timer-bg-green").addEventListener("click", function () {
     var pressed = this.getAttribute("aria-pressed") === "true";
     this.setAttribute("aria-pressed", pressed ? "false" : "true");
+    // Transparent (spec: docs/specs/alpha-export.md): mutually exclusive
+    // with green — turning green ON forces transparent OFF.
+    if (!pressed) $("timer-bg-transparent").setAttribute("aria-pressed", "false");
+    updateTimer();
+  });
+  // Transparent (spec: docs/specs/alpha-export.md): mirror image of the
+  // green handler above, including the same "plain button click fires no
+  // form event" reasoning.
+  $("timer-bg-transparent").addEventListener("click", function () {
+    var pressed = this.getAttribute("aria-pressed") === "true";
+    this.setAttribute("aria-pressed", pressed ? "false" : "true");
+    if (!pressed) $("timer-bg-green").setAttribute("aria-pressed", "false");
     updateTimer();
   });
 

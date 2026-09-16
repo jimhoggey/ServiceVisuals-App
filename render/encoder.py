@@ -67,7 +67,8 @@ def export_path(prefix, descriptor, ext=".mp4"):
 
 
 def encode_parallel(out_path, input_fps, total_frames, make_frame,
-                    progress_cb=None, output_fps=OUTPUT_FPS):
+                    progress_cb=None, output_fps=OUTPUT_FPS,
+                    alpha_format=None):
     """Generate frames on a thread pool and write them to ffmpeg IN ORDER.
 
     Pillow releases the GIL inside its C image routines, so threads give real
@@ -78,9 +79,15 @@ def encode_parallel(out_path, input_fps, total_frames, make_frame,
     make_frame(k) must only READ shared images and return a fresh frame, so
     frames can be built concurrently. Work is done in small batches so at most
     ~2 frames per worker are ever in memory (a 1080p RGB frame is ~6 MB).
+
+    `alpha_format` (docs/specs/alpha-export.md) is forwarded straight to
+    FrameEncoder untouched — None means the existing RGB/MP4 path, so every
+    caller that never passes it is byte-identical to before this feature
+    existed.
     """
     workers = max(1, min(6, (os.cpu_count() or 2) - 1))
-    with FrameEncoder(out_path, input_fps, output_fps=output_fps) as enc:
+    with FrameEncoder(out_path, input_fps, output_fps=output_fps,
+                      alpha_format=alpha_format) as enc:
         if workers == 1:
             for k in range(total_frames):
                 enc.add_frame(make_frame(k))
@@ -158,16 +165,59 @@ class EncoderError(RuntimeError):
     pass
 
 
+# ---------------------------------------------------------- alpha export
+# docs/specs/alpha-export.md. A FIXED codec per format -- chosen for what
+# ProPresenter/CapCut can actually open (confirmed by dropping real
+# exported clips into CapCut; earlier research assumed WebM would also
+# work here and it does not -- CapCut showed it as a solid white box),
+# never probed or picked for speed -- so this is a completely separate
+# table from _CODEC_FLAGS above, which exists ONLY to pick the fastest
+# available H.264 encoder.
+ALPHA_FORMATS = {
+    "qtrle": {
+        # QuickTime Animation (RLE) -- lossless. The default: CapCut-
+        # confirmed transparent, and roughly a third the size of ProRes
+        # on real timer content (see the spec's Why section) because RLE
+        # compresses the plate/track's large flat runs far harder than
+        # ProRes's intra-frame DCT does. NOT on ProPresenter's documented
+        # supported-format list (H.264, HEVC, ProRes variants, HAP), and
+        # nobody has tested it there -- neither this comment nor the UI
+        # copy may claim it works in ProPresenter.
+        "vcodec": "qtrle",
+        "flags": [],
+        "pix_fmt": "argb",
+        "container": "mov",
+        "ext": ".mov",
+        "movflags": True,
+    },
+    "prores": {
+        # The maximum-compatibility choice: CapCut-confirmed AND on
+        # ProPresenter's documented supported-format list. Pick this one
+        # whenever the file is going straight into ProPresenter.
+        "vcodec": "prores_ks",
+        "flags": ["-profile:v", "4444"],
+        "pix_fmt": "yuva444p10le",
+        "container": "mov",
+        "ext": ".mov",
+        "movflags": True,   # meaningful for a mov/mp4-family muxer
+    },
+}
+
+
 class FrameEncoder:
-    """Context manager that encodes PIL RGB frames to an MP4 file.
+    """Context manager that encodes PIL frames to a video file.
 
     Usage:
         with FrameEncoder("/path/out.mp4", input_fps=10) as enc:
             enc.add_frame(pil_image)   # 1920x1080, mode RGB
+
+    With `alpha_format` set (docs/specs/alpha-export.md) frames must be
+    RGBA instead, and the file written is a .mov carrying real alpha —
+    see ALPHA_FORMATS above.
     """
 
     def __init__(self, out_path, input_fps, width=WIDTH, height=HEIGHT,
-                 output_fps=OUTPUT_FPS):
+                 output_fps=OUTPUT_FPS, alpha_format=None):
         self.out_path = out_path
         # Encode to a temporary *.part name and os.replace() it into place
         # only on success, so a killed process (Ctrl+C mid-render) can never
@@ -176,26 +226,59 @@ class FrameEncoder:
         self.width = width
         self.height = height
         self.frames_written = 0
+        self._alpha_format = alpha_format
         # ffmpeg writes progress chatter to stderr; buffer it in a temp file
         # so the pipe can never fill up and deadlock us.
         self._stderr = tempfile.TemporaryFile()
+
+        if alpha_format is None:
+            # UNCHANGED from before alpha export, character for character --
+            # do not fold this into a shared table with ALPHA_FORMATS above.
+            # Calling pick_codec() once here instead of twice (the old code
+            # called it once for -vcodec and again to index _CODEC_FLAGS)
+            # changes nothing observable: pick_codec() is memoized at
+            # module level, so both calls already returned the same cached
+            # value.
+            in_pix_fmt = "rgb24"
+            vcodec = pick_codec()
+            codec_args = ["-vcodec", vcodec, *_CODEC_FLAGS[vcodec],
+                          "-pix_fmt", "yuv420p"]
+            container = "mp4"
+            movflags = True
+        else:
+            # Alpha export (docs/specs/alpha-export.md). Deliberately never
+            # calls pick_codec()/_probe_codec() or touches _CODEC_FLAGS:
+            # pick_codec()'s Windows candidates (h264_nvenc/h264_qsv/
+            # h264_amf) are H.264-only hardware encoders that cannot
+            # produce alpha at all, _CODEC_FLAGS has no entry for
+            # prores_ks/qtrle (a lookup would KeyError), and probing
+            # costs a real subprocess spawn (up to a 20s timeout) to
+            # "discover" a choice that was never in question -- there is
+            # no GPU-accelerated ProRes or RLE encoder to find on a
+            # volunteer's laptop, and this path picks its codec from the
+            # format the operator chose, not from what is fastest.
+            fmt_spec = ALPHA_FORMATS[alpha_format]
+            in_pix_fmt = "rgba"
+            codec_args = ["-vcodec", fmt_spec["vcodec"], *fmt_spec["flags"],
+                          "-pix_fmt", fmt_spec["pix_fmt"]]
+            container = fmt_spec["container"]
+            movflags = fmt_spec["movflags"]
+
         cmd = [
             imageio_ffmpeg.get_ffmpeg_exe(),
             "-y",
             "-f", "rawvideo",
-            "-pix_fmt", "rgb24",
+            "-pix_fmt", in_pix_fmt,
             "-s", f"{width}x{height}",
             "-r", str(input_fps),
             "-i", "-",
             "-an",
-            "-vcodec", pick_codec(),
-            *_CODEC_FLAGS[pick_codec()],
-            "-pix_fmt", "yuv420p",
+            *codec_args,
             "-r", str(output_fps),
-            "-movflags", "+faststart",
-            "-f", "mp4",          # .part suffix hides the extension
-            self._tmp_path,
         ]
+        if movflags:
+            cmd += ["-movflags", "+faststart"]
+        cmd += ["-f", container, self._tmp_path]   # .part hides the ext
         # On Windows the app is built --windowed (no console), so spawning
         # ffmpeg normally flashes a console window for EVERY render. Suppress
         # it the same way updater.py does for its helper script.
@@ -211,8 +294,16 @@ class FrameEncoder:
         if image.size != (self.width, self.height):
             raise EncoderError(
                 f"frame is {image.size}, expected {(self.width, self.height)}")
-        if image.mode != "RGB":
-            image = image.convert("RGB")
+        if self._alpha_format is None:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+        elif image.mode != "RGBA":
+            # A renderer bug, not an operator mistake -- silently
+            # converting (today's non-alpha rule, above) would flatten or
+            # discard the alpha this whole feature exists to keep, so this
+            # fails loudly instead, the same way the size check above does.
+            raise EncoderError(
+                f"alpha frame is {image.mode}, expected RGBA")
         try:
             self._proc.stdin.write(image.tobytes())
         except BrokenPipeError:

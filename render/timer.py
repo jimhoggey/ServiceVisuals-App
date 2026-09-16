@@ -31,7 +31,8 @@ from collections import OrderedDict
 from PIL import Image, ImageDraw, ImageFilter
 
 from . import fonts
-from .encoder import WIDTH, HEIGHT, encode_parallel, export_path
+from .encoder import (
+    WIDTH, HEIGHT, ALPHA_FORMATS, encode_parallel, export_path)
 
 TIMER_OUTPUT_FPS = 15   # see the FrameEncoder call in render_timer()
 
@@ -192,6 +193,11 @@ def _plates(options, style, accent):
     the untouched vignette path, so that case is byte-identical to today
     (docs/specs/timer-backgrounds.md).
 
+    Under Transparent (docs/specs/alpha-export.md) the plate is RGBA
+    instead of every other case's RGB — the only place in this module
+    that is true — because it is the one plate meant to carry its own
+    alpha all the way to the encoder rather than be a solid fill.
+
     Returns (plates, accent_tile). accent_tile is a plain colour fill
     independent of any background image, so it is only ever built once,
     same as before this feature existed.
@@ -200,7 +206,15 @@ def _plates(options, style, accent):
     bg_dim = options.get("bg_dim", 45)
     bg_blur = bool(options.get("bg_blur", False))
 
-    if options.get("green_screen"):
+    if options.get("transparent"):
+        # Fully transparent plate (docs/specs/alpha-export.md). The
+        # track-painting loop below needs no change for this: it pastes
+        # a plain RGB tile through an independently-built 'L' mask, and
+        # that specific combination already composites correctly onto
+        # an RGBA destination (verified — see _paste_digits below for
+        # the one paste pattern in this file that does NOT).
+        plates = [Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))]
+    elif options.get("green_screen"):
         plates = [Image.new("RGB", (WIDTH, HEIGHT), GREEN_SCREEN)]
     elif paths:
         plates = [prepare_background(p, bg_dim, bg_blur) for p in paths]
@@ -221,6 +235,36 @@ def _plates(options, style, accent):
     elif style == "bar":
         accent_tile = Image.new("RGB", (BAR_WIDTH, BAR_HEIGHT), accent)
     return plates, accent_tile
+
+
+def _bg_descriptor_suffix(options):
+    """The Background group's filename suffix — shared by render_timer and
+    _render_clock so the on/off-then-three-way choice can't drift between
+    the two (docs/specs/alpha-export.md). At most one of these is ever
+    true — validation.py rejects green_screen + transparent together — so
+    this is a plain if/elif chain, not independent flags that need
+    combining.
+    """
+    transparent = options.get("transparent")
+    if transparent == "qtrle":
+        return "_alpha_qtrle"
+    if transparent == "prores":
+        return "_alpha_prores"
+    if options.get("green_screen"):
+        return "_green"
+    return ""
+
+
+def _export_ext(options):
+    """.mov for either alpha format, .mp4 for everything else (including
+    green screen) — ALPHA_FORMATS in render/encoder.py is the one place
+    that knows each alpha format's container extension, so a hypothetical
+    future alpha format in a different container needs no change here.
+    """
+    transparent = options.get("transparent")
+    if transparent:
+        return ALPHA_FORMATS[transparent]["ext"]
+    return ".mp4"
 
 
 def plate_index(i, fps, bg_seconds, n_plates):
@@ -278,7 +322,7 @@ def _digit_shadow(alpha):
     return canvas, pad
 
 
-def _paste_digits(base, block, x, y, has_bg):
+def _paste_digits(base, block, x, y, has_bg, alpha=False):
     """Paste an RGBA digits/clock `block` onto `base` at (x, y).
 
     With `has_bg` (a real background image, not the plain vignette) this
@@ -287,11 +331,39 @@ def _paste_digits(base, block, x, y, has_bg):
     exactly `base.paste(block, (x, y), block)` — the one line this whole
     feature replaces — so the byte-identical no-background guarantee
     (docs/specs/timer-backgrounds.md) holds for this addition too.
+
+    `alpha=True` (docs/specs/alpha-export.md, Transparent background only)
+    routes through Image.alpha_composite() instead — see the comment on
+    that branch below for the compositing bug it exists to avoid.
     """
     if has_bg:
         halo, pad = _digit_shadow(block.split()[-1])
         black = Image.new("RGB", halo.size, (0, 0, 0))
         base.paste(black, (x - pad, y - pad), halo)
+    if alpha:
+        # base.paste(block, (x, y), block) below uses `block`'s OWN
+        # alpha band as its mask. Pillow blends dest and source using
+        # that mask fraction for EVERY band, including alpha itself --
+        # which is only correct while the destination is still fully
+        # transparent. On an alpha plate the ring/bar TRACK has already
+        # painted opaque pixels before digits land, and a semi-
+        # transparent glyph-edge pixel pasted this way over an opaque
+        # track pixel pulls the result's alpha DOWN toward the glyph's
+        # own (lower) alpha instead of staying opaque -- verified with
+        # a real Pillow paste: a 50%-alpha source over a fully-opaque
+        # destination came back well short of fully opaque. Composited
+        # into a real editor that is a faint hole at every glyph edge --
+        # the exact fringe problem alpha export exists to remove, just
+        # moved into the alpha channel instead of the colour channel.
+        # Image.alpha_composite() implements real Porter-Duff "over"
+        # and does not have this problem (verified the same way: the
+        # same 50%-alpha source over the same opaque destination stayed
+        # fully opaque). It requires same-size RGBA images, so crop the
+        # destination region, composite, paste the (now correctly
+        # composited) result straight back with no mask.
+        region = base.crop((x, y, x + block.width, y + block.height))
+        base.paste(Image.alpha_composite(region, block), (x, y))
+        return
     base.paste(block, (x, y), block)
 
 
@@ -681,7 +753,19 @@ def _render_clock(options, progress_cb):
     # A real background image, not the plain vignette — gates the digit
     # shadow below (_paste_digits) so a plain-vignette render never grows
     # one and stays byte-identical to before this feature existed.
-    has_bg = bool(options.get("backgrounds"))
+    # Which _paste_digits() compositing path to use (docs/specs/
+    # alpha-export.md) — computed once, next to has_bg, since both gate
+    # the same call sites below.
+    is_alpha = bool(options.get("transparent"))
+    # ...and the halo is suppressed under alpha even if backgrounds
+    # somehow survived: validation forces backgrounds to [] for a
+    # transparent render, but if that ever slipped, _digit_shadow's
+    # soft black would be painted straight into the alpha channel
+    # with nothing behind it -- a permanent dark smudge around every
+    # digit in whatever the operator later composites over. Trusting
+    # one caller not to send the combination fails silently; this
+    # fails not at all.
+    has_bg = bool(options.get("backgrounds")) and not is_alpha
 
     sample_main, _sample_tag = format_clock_time(
         start_ms, fmt, show_seconds, show_millis)
@@ -702,7 +786,8 @@ def _render_clock(options, progress_cb):
     out_path = export_path(
         "clock", "{0:02d}{1:02d}-{2:02d}_{3}s_{4}{5}".format(
             sh, sm, ss, duration, style,
-            "_green" if options.get("green_screen") else ""))
+            _bg_descriptor_suffix(options)),
+        ext=_export_ext(options))
 
     # Same per-second base cache as the countdown's base_for, but keyed on
     # the displayed text/tag rather than remaining seconds — skipped
@@ -729,7 +814,8 @@ def _render_clock(options, progress_cb):
         base = plates[idx].copy()
         _paste_digits(base, block,
                       WIDTH // 2 - block.width // 2,
-                      digits_cy - block.height // 2, has_bg)
+                      digits_cy - block.height // 2, has_bg,
+                      alpha=is_alpha)
         with bases_lock:
             bases[key] = base
             while len(bases) > bases_cap:
@@ -748,7 +834,8 @@ def _render_clock(options, progress_cb):
             base = plates[idx].copy()
             _paste_digits(base, block,
                           WIDTH // 2 - block.width // 2,
-                          digits_cy - block.height // 2, has_bg)
+                          digits_cy - block.height // 2, has_bg,
+                          alpha=is_alpha)
         else:
             base = base_for(main_text, "", tag, idx)
         if style != "ring":
@@ -761,7 +848,8 @@ def _render_clock(options, progress_cb):
         return frame
 
     encode_parallel(out_path, fps, total_frames, make_frame, progress_cb,
-                    output_fps=out_fps)
+                    output_fps=out_fps,
+                    alpha_format=options.get("transparent") or None)
     return os.path.basename(out_path)
 
 
@@ -824,7 +912,19 @@ def render_timer(options, progress_cb):
     # A real background image, not the plain vignette — gates the digit
     # shadow below (_paste_digits) so a plain-vignette render never grows
     # one and stays byte-identical to before this feature existed.
-    has_bg = bool(options.get("backgrounds"))
+    # Which _paste_digits() compositing path to use (docs/specs/
+    # alpha-export.md) — computed once, next to has_bg, since both gate
+    # the same call sites below.
+    is_alpha = bool(options.get("transparent"))
+    # ...and the halo is suppressed under alpha even if backgrounds
+    # somehow survived: validation forces backgrounds to [] for a
+    # transparent render, but if that ever slipped, _digit_shadow's
+    # soft black would be painted straight into the alpha channel
+    # with nothing behind it -- a permanent dark smudge around every
+    # digit in whatever the operator later composites over. Trusting
+    # one caller not to send the combination fails silently; this
+    # fails not at all.
+    has_bg = bool(options.get("backgrounds")) and not is_alpha
 
     # Always HH:MM:SS instead of the shortest shape that fits the total.
     fixed = bool(options.get("fixed_format"))
@@ -860,7 +960,8 @@ def render_timer(options, progress_cb):
         "timer", "{0}m{1:02d}s_{2}{3}{4}".format(
             total // 60, total % 60, style,
             "_ms" if show_millis else "",
-            "_green" if options.get("green_screen") else ""))
+            _bg_descriptor_suffix(options)),
+        ext=_export_ext(options))
 
     # Digit bases (a plate + digits for one displayed second) are shared by
     # every frame within that second. The cache is small and lock-guarded so
@@ -886,7 +987,8 @@ def render_timer(options, progress_cb):
         base = plates[idx].copy()
         _paste_digits(base, block,
                       WIDTH // 2 - block.width // 2,
-                      digits_cy - block.height // 2, has_bg)
+                      digits_cy - block.height // 2, has_bg,
+                      alpha=is_alpha)
         with bases_lock:
             bases[key] = base
             while len(bases) > bases_cap:
@@ -916,7 +1018,8 @@ def render_timer(options, progress_cb):
             base = plates[idx].copy()
             _paste_digits(base, block,
                           WIDTH // 2 - block.width // 2,
-                          digits_cy - block.height // 2, has_bg)
+                          digits_cy - block.height // 2, has_bg,
+                          alpha=is_alpha)
         else:
             elapsed = int(t)
             rem = total - elapsed if elapsed < total else 0
@@ -938,5 +1041,6 @@ def render_timer(options, progress_cb):
     # uses 30/30 (set above) so every unique ms value actually gets its own
     # encoded frame instead of being smeared across duplicated output frames.
     encode_parallel(out_path, fps, total_frames, make_frame, progress_cb,
-                    output_fps=out_fps)
+                    output_fps=out_fps,
+                    alpha_format=options.get("transparent") or None)
     return os.path.basename(out_path)
