@@ -375,9 +375,9 @@ against in the UI.
 
 | Control | Details |
 |---|---|
-| Full-size milliseconds | Checkbox, `timer-millis-full-size`, default off. Hint: "Milliseconds match the main digits instead of 55%." |
-| Reveal near the end | Checkbox, `timer-millis-reveal`, default off. Hint: "Milliseconds show as .000 until the last N seconds, then tick normally." |
-| Seconds before the end | Number input, `timer-millis-reveal-seconds`, 1-1800, default **60**. Shown/enabled only while Reveal is checked. |
+| Full-size milliseconds | Checkbox, `timer-millis-full-size`, default off. Label: **Full-size milliseconds**. Hint: "The .000 is the same size as the minutes and seconds. The whole timer is drawn a little smaller so it still fits." (Must name the shrink — see What full-size millis cost. Never say "55%": a volunteer does not know what it is 55% of.) |
+| Hold at zero until the end | Checkbox, `timer-millis-reveal`, default off. Label: **Hold at zero until the end** (renamed from "Reveal near the end": nothing is revealed — the millis are on screen the whole time, so the old name described the superseded design). Hint: "Shows .000 without ticking until the last few seconds, then counts down normally." |
+| Seconds before the end | Number input, `timer-millis-reveal-seconds`, 1-1800, default **60** (owner confirmed: starts on the 1:00 boundary). Label: **Start ticking with this many seconds left**. Shown only while Hold at zero is checked. |
 
 If the seconds field's value is ≥ the countdown's current total, its hint
 instead reads: "Milliseconds tick for the whole timer (it's only Ns
@@ -411,7 +411,8 @@ Collision check, above).
 - `millis_full_size` — bool, default `false`. Not a bool →
   *"Full-size milliseconds" must be true or false.*
 - `millis_reveal` — bool, default `false`. Not a bool →
-  *"Reveal near the end" must be true or false.*
+  *"Hold at zero until the end" must be true or false.* (The quoted name
+  must match the UI label exactly.)
 - `millis_reveal_seconds` — whole number, **1 to 1800**, default `60`.
   Custom message (same shape as `_clip_length_field`'s, since the generic
   `_int_field` template's phrasing doesn't fit a "seconds left" field
