@@ -757,6 +757,12 @@ input[type="color"] {
   gap: 10px;
   margin: 0 0 18px;
 }
+
+/* A disabled checkbox must LOOK disabled, not only its small native box:
+   the millis-only options grey out while Show milliseconds is off, and
+   with just the box dimmed their labels read exactly like the live
+   "Fixed 00:00:00 format" beside them. Same 0.45 as .btn:disabled. */
+.check-row input:disabled + label { opacity: 0.45; cursor: not-allowed; }
 .check-row input[type="checkbox"] {
   width: 18px; height: 18px;
   accent-color: var(--accent);

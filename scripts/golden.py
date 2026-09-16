@@ -226,6 +226,41 @@ def _build_jobs():
              "hold_seconds": 2, "show_millis": True,
              "millis_full_size": True, "millis_reveal": True,
              "millis_reveal_seconds": 4, "fixed_format": True})),
+        # docs/specs/millis-60fps.md: the plain 60fps path (no reveal --
+        # ticks live the whole way).
+        ("timer/classic-millis-60fps", lambda: _timer(
+            {"minutes": 0, "seconds": 6, "style": "classic",
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2, "show_millis": True,
+             "millis_60fps": True})),
+        # The frozen-cache-at-60fps interaction, classic style.
+        ("timer/classic-millis-60fps-reveal", lambda: _timer(
+            {"minutes": 0, "seconds": 6, "style": "classic",
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2, "show_millis": True,
+             "millis_60fps": True, "millis_reveal": True,
+             "millis_reveal_seconds": 4})),
+        # Same frozen-cache-at-60fps interaction on ring -- the one style
+        # with its own per-frame overlay cost (_ring_mask) this spec's
+        # benchmark did not model, so a future regression there shows up
+        # as a hash mismatch instead of going unnoticed.
+        ("timer/ring-millis-60fps-reveal", lambda: _timer(
+            {"minutes": 0, "seconds": 6, "style": "ring",
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2, "show_millis": True,
+             "millis_60fps": True, "millis_reveal": True,
+             "millis_reveal_seconds": 4})),
+        # BAR had no golden job with milliseconds at all, despite
+        # _bar_mask carrying the same per-frame cost that justified the
+        # ring job above -- a review found the ring reasoning was never
+        # carried over. All three options at once, so one render also
+        # covers the combination no other job exercises together.
+        ("timer/bar-millis-60fps-reveal-full-size", lambda: _timer(
+            {"minutes": 0, "seconds": 6, "style": "bar",
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2, "show_millis": True,
+             "millis_60fps": True, "millis_reveal": True,
+             "millis_reveal_seconds": 4, "millis_full_size": True})),
         ("timer/bar-two-backgrounds", lambda: _timer(
             {"minutes": 0, "seconds": 6, "style": "bar",
              "accent": "#e8b44f", "warn_last10": True,

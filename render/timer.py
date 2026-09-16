@@ -859,12 +859,14 @@ def _render_clock(options, progress_cb):
     return os.path.basename(out_path)
 
 
-# ---- countdown millis: full-size + freeze-until-the-end -----------------
+# ---- countdown millis: full-size + freeze-until-the-end + 60fps ---------
 #
-# docs/specs/millis-reveal.md. Both functions are countdown-only, pure, and
-# additive: _render_clock above is left completely unmodified and keeps its
-# own inline CLOCK_MS_SCALE math, so clock mode's byte-identical output can
-# never be put at risk by a change made for this feature.
+# docs/specs/millis-reveal.md and docs/specs/millis-60fps.md. All three
+# functions below are countdown-only, pure, and additive: _render_clock
+# above is left completely unmodified and keeps its own inline
+# CLOCK_MS_SCALE math and fixed 30/30 millis fps, so clock mode's byte-
+# identical output can never be put at risk by a change made for either
+# feature.
 
 def _millis_size(main_size, full_size):
     """The millis run's font size in px, given the countdown's already-
@@ -892,6 +894,18 @@ def _millis_ticking(rem_ms, millis_reveal, millis_reveal_seconds):
     "The freeze/tick boundary").
     """
     return (not millis_reveal) or (rem_ms <= millis_reveal_seconds * 1000)
+
+
+def _millis_fps(millis_60fps):
+    """The countdown millis fps: 60 when the operator turned on smoother
+    milliseconds, else today's 30 (docs/specs/millis-60fps.md). The one
+    place this decision is made -- render_timer feeds this SAME number
+    into both input_fps and output_fps (never 30-in/60-out, which the
+    spec measured as only duplicating frames, not smoothing them -- see
+    its Frame rate rules), so there is no ternary for a caller to get
+    wrong by inlining it, or to pass mismatched values for.
+    """
+    return 60 if millis_60fps else 30
 
 
 # ---- main entry point -----------------------------------------------------------
@@ -929,12 +943,22 @@ def render_timer(options, progress_cb):
     # Addendum (v1.23.0): the same millis toggle clock mode uses, now also
     # accepted on a countdown. Every frame's ms differs, so the per-second
     # base cache below can't help it and 15fps->duplicated output would be
-    # visibly choppy — millis countdowns get their own 30fps input/output,
-    # exactly like clock mode's millis path. Without millis this whole
-    # branch is skipped and `fps`/`out_fps` come out exactly as before.
+    # visibly choppy — millis countdowns get their own fps pair (input
+    # equal to output), exactly like clock mode's millis path. Without
+    # millis this whole branch is skipped and `fps`/`out_fps` come out
+    # exactly as before.
     show_millis = bool(options.get("show_millis", False))
+    # docs/specs/millis-60fps.md: accepted regardless of show_millis, like
+    # fixed_format/millis_full_size/millis_reveal below — simply inert
+    # when millis are off, since _millis_fps is only called inside the
+    # `if show_millis` branch two lines down.
+    millis_60fps = bool(options.get("millis_60fps", False))
     if show_millis:
-        fps, out_fps = 30, 30
+        # input_fps == output_fps, always: 30-in/60-out would only
+        # duplicate frames, not smooth them (_millis_fps's docstring; the
+        # spec's Frame rate rules). No mid-file fps switch either — one
+        # constant pair for the whole encode.
+        fps = out_fps = _millis_fps(millis_60fps)
     else:
         fps = _input_fps(style, total)
         out_fps = TIMER_OUTPUT_FPS
@@ -1015,9 +1039,14 @@ def render_timer(options, progress_cb):
         if show_millis else None
 
     out_path = export_path(
-        "timer", "{0}m{1:02d}s_{2}{3}{4}".format(
+        "timer", "{0}m{1:02d}s_{2}{3}{4}{5}".format(
             total // 60, total % 60, style,
             "_ms" if show_millis else "",
+            # docs/specs/millis-60fps.md: a frame-rate/timing property
+            # gets its own filename marker, same convention as "_ms"
+            # itself, rather than millis_full_size/millis_reveal's (purely
+            # cosmetic refinements, no marker).
+            "_60fps" if (show_millis and millis_60fps) else "",
             _bg_descriptor_suffix(options)),
         ext=_export_ext(options))
 

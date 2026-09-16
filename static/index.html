@@ -426,7 +426,7 @@
                 <input type="checkbox" id="timer-show-millis">
                 <label for="timer-show-millis">Show milliseconds</label>
               </div>
-              <p class="hint">Renders at 30 fps &#8212; longer to export</p>
+              <p class="hint" id="timer-show-millis-hint">Renders at 30 fps &#8212; longer to export</p>
               <!-- Full-size / Hold-at-zero (spec: docs/specs/millis-reveal.md):
                    both independent of each other and of style -- neither
                    disables the other, nothing left to cross-check (see the
@@ -455,6 +455,20 @@
                 <label for="timer-fixed-format">Fixed 00:00:00 format</label>
               </div>
               <p class="hint" id="timer-fixed-hint">Every timer reads 00:05:00, so the numbers look the same at any length.</p>
+              <!-- Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
+                   countdown-only, unlike the millis controls above -- hidden
+                   outright in clock mode by applyTimerMode() (same mechanism
+                   that hides the BAR style there) rather than staying
+                   visible-but-inert, because clock mode has no "total
+                   duration" for the 15-minute cap below to mean anything
+                   against. Disabled + auto-unchecked past that cap by the
+                   same function, mirroring the timer-bg-add-at-cap
+                   disabled/title precedent above (renderTimerBgStrip()). -->
+              <div class="check-row" id="timer-millis-60fps-row">
+                <input type="checkbox" id="timer-millis-60fps">
+                <label for="timer-millis-60fps">Smoother milliseconds (60 fps)</label>
+              </div>
+              <p class="hint" id="timer-millis-60fps-hint">Turn this on when the ticking numbers are the whole point &#8212; a dramatic final countdown viewed up close. It roughly doubles render time and makes the file about 50% bigger. Only helps if your editor also exports at 60 fps: export at 30 and the extra frames are thrown away.</p>
             </fieldset>
             <fieldset class="group" id="timer-options-group">
               <legend>Options</legend>

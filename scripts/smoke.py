@@ -14,6 +14,7 @@ own test files from exports/ so the user's export folder stays clean.
 Run:  .venv/bin/python scripts/smoke.py
 """
 
+import hashlib
 import json
 import os
 import re
@@ -118,6 +119,54 @@ def verify(name, filename, expected_duration, expected_codec="h264",
     ok = dur is not None and abs(dur - expected_duration) <= 0.5
     check("{0} duration ~{1}s".format(name, expected_duration), ok,
           "got {0!r}".format(dur))
+
+
+def _showinfo_pts(path):
+    """Decode every frame with the bundled ffmpeg's showinfo filter and
+    return the list of pts_time floats in decode order (docs/specs/
+    millis-60fps.md) -- the ground truth for frame count and inter-frame
+    spacing. A container header's "NN fps" tag or a Duration: line (what
+    probe()/verify() above already check) can't tell a genuine constant
+    framerate from a relabeled or duplicated one; a per-frame decode can.
+    No "-v error" here (unlike probe()'s ffmpeg call) -- showinfo logs at
+    ffmpeg's default "info" level, so quieting the log would silence the
+    very lines this reads.
+    """
+    proc = subprocess.run(
+        [FFMPEG, "-hide_banner", "-i", path, "-vf", "showinfo",
+         "-f", "null", "-"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    text = proc.stderr.decode("utf-8", "replace")
+    return [float(m) for m in re.findall(r"pts_time:([\d.]+)", text)]
+
+
+def _frame_hashes(path, count, width=1920, height=1080):
+    """Decode the first `count` frames to raw RGB24 and return one
+    sha256 hex digest per frame (docs/specs/millis-60fps.md) -- proves
+    frames genuinely differ rather than trusting timestamps alone, the
+    same way golden.py hashes decoded pixels rather than trusting a
+    container tag. Streamed in fixed chunks like golden.py's _hash_mp4,
+    so a run is never held whole in memory -- only `count` frames are
+    requested from ffmpeg at all, so this stays cheap even though the
+    full clip may be much longer.
+    """
+    frame_size = width * height * 3
+    proc = subprocess.Popen(
+        [FFMPEG, "-v", "error", "-i", path, "-frames:v", str(count),
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    hashes = []
+    buf = b""
+    while True:
+        chunk = proc.stdout.read(1024 * 1024)
+        if not chunk:
+            break
+        buf += chunk
+        while len(buf) >= frame_size:
+            hashes.append(hashlib.sha256(buf[:frame_size]).hexdigest())
+            buf = buf[frame_size:]
+    proc.communicate()
+    return hashes
 
 
 def check_whats_new():
@@ -567,12 +616,19 @@ def check_clock_validation():
     # this feature either. This fixture predates the feature, which is
     # why it needs updating here rather than validate_timer_options being
     # wrong (docs/specs/millis-reveal.md, Validation + smoke agent).
+    # Addendum (millis-60fps.md): millis_60fps defaults to False, a
+    # fourth countdown-only millis default alongside fixed_format/
+    # millis_full_size/millis_reveal, for the same "a caller that never
+    # heard of this feature still gets the default" reason. Stale
+    # fixture, not a regression -- validate_timer_options itself already
+    # returns this key (docs/specs/millis-60fps.md, Validation + smoke
+    # agent).
     expected = {"minutes": 1, "seconds": 0, "style": "ring",
                 "accent": "#e8b44f", "warn_last10": False,
                 "hold_seconds": 3, "show_millis": False,
                 "fixed_format": False,
                 "millis_full_size": False, "millis_reveal": False,
-                "millis_reveal_seconds": 60,
+                "millis_reveal_seconds": 60, "millis_60fps": False,
                 "backgrounds": [], "bg_seconds": 10, "bg_dim": 45,
                 "bg_blur": False, "green_screen": False,
                 "transparent": False}
@@ -2364,6 +2420,16 @@ def check_millis_reveal_validation():
                  dict(base, millis_reveal_seconds=1801),
                  "Milliseconds can start ticking with 1 to 1800 seconds "
                  "left on the timer.")
+    # The rejections just outside the range prove nothing about the
+    # range itself: a `<=` typed as `<` would reject 1 and 1800 too and
+    # still pass both checks above.
+    for edge in (1, 1800):
+        edge_clean = validate_timer_options(
+            dict(base, millis_reveal_seconds=edge))
+        check("millis_reveal_seconds {0} (the range edge) is accepted"
+              .format(edge),
+              edge_clean["millis_reveal_seconds"] == edge,
+              "got {0!r}".format(edge_clean))
 
     clean = validate_timer_options(
         dict(base, millis_full_size=True, millis_reveal=True,
@@ -2553,6 +2619,366 @@ def check_millis_reveal_alpha_fringe():
         shutil.rmtree(frame_dir, ignore_errors=True)
         if os.path.isfile(path):
             os.unlink(path)
+
+
+def check_millis_60fps_pure():
+    """docs/specs/millis-60fps.md: _millis_fps(millis_60fps) is the ONE
+    place render_timer decides the countdown millis fps -- nothing else
+    computes "60 if ... else 30" inline. Exercised directly, pure, no
+    rendering involved (same convention as check_millis_size_and_
+    ticking's _millis_ticking checks above).
+    """
+    from render.timer import _millis_fps
+
+    print("Timer: millis fps selection (pure)")
+
+    check("_millis_fps(False) is 30 (today's rate, unchanged)",
+          _millis_fps(False) == 30,
+          "got {0!r}".format(_millis_fps(False)))
+    check("_millis_fps(True) is 60 (smoother milliseconds)",
+          _millis_fps(True) == 60,
+          "got {0!r}".format(_millis_fps(True)))
+
+
+def check_millis_60fps_validation():
+    """validation._validate_countdown_options: millis_60fps
+    (docs/specs/millis-60fps.md) -- default, the bool-type error, the
+    900s ceiling accepting exactly at the boundary and rejecting one
+    second past it with the exact message, the SAME 901s total being
+    accepted once millis_60fps is off (the two ceilings are independent,
+    not one replacing the other), and proof clock mode never sees the
+    key. Mirrors check_millis_reveal_validation's own shape for its
+    sibling options.
+    """
+    from validation import ValidationError, validate_timer_options
+
+    print("Timer: millis-60fps validation")
+
+    base = {"minutes": 5, "seconds": 0, "show_millis": True}
+    clean = validate_timer_options(dict(base))
+    check("millis_60fps defaults to off",
+          clean["millis_60fps"] is False, "got {0!r}".format(clean))
+
+    try:
+        validate_timer_options(dict(base, millis_60fps="yes"))
+        check("millis_60fps must be a boolean", False, "no error raised")
+    except ValidationError as exc:
+        check("millis_60fps must be a boolean",
+              str(exc) ==
+              '"Smoother milliseconds (60 fps)" must be true or false.',
+              "got {0!r}".format(str(exc)))
+
+    # 900s (15 minutes) is the owner's real flagship use case -- exactly
+    # AT the 60fps ceiling must be ACCEPTED. An off-by-one here (> vs >=)
+    # would block exactly the render he wants.
+    clean = validate_timer_options(
+        dict(minutes=15, seconds=0, show_millis=True, millis_60fps=True))
+    check("900s (15 min) with millis_60fps on is accepted (the ceiling "
+          "is inclusive, not exclusive)",
+          clean.get("millis_60fps") is True, "got {0!r}".format(clean))
+
+    try:
+        validate_timer_options(
+            dict(minutes=15, seconds=1, show_millis=True,
+                 millis_60fps=True))
+        check("901s with millis_60fps on is rejected", False,
+              "no error raised")
+    except ValidationError as exc:
+        check("901s with millis_60fps on is rejected with the exact "
+              "60fps-ceiling message",
+              str(exc) == "With smoother milliseconds (60 fps) on, "
+                          "the timer can run for at most 15 minutes. "
+                          "Turn 60 fps off for a longer timer.",
+              "got {0!r}".format(str(exc)))
+
+    # The two ceilings are independent: the SAME 901s total, with
+    # millis_60fps off, must not trip the 60fps message at all -- it is
+    # well under the existing 1800s ceiling, so it is simply accepted.
+    clean = validate_timer_options(
+        dict(minutes=15, seconds=1, show_millis=True, millis_60fps=False))
+    check("901s with millis_60fps OFF is still accepted (the two "
+          "ceilings are independent, not one replacing the other)",
+          clean.get("millis_60fps") is False, "got {0!r}".format(clean))
+
+    # Clock mode is countdown-only territory for this key too -- same
+    # pattern as check_fixed_format / check_millis_reveal_validation's
+    # own clock-ignores checks.
+    clock = {"mode": "clock", "start": "19:59:50", "duration_seconds": 30}
+    clean = validate_timer_options(dict(clock, millis_60fps=True))
+    check("clock mode ignores millis_60fps",
+          "millis_60fps" not in clean, "got {0!r}".format(clean))
+
+
+def check_millis_60fps_render():
+    """docs/specs/millis-60fps.md -- the "genuine 60fps, not 30fps
+    duplicated" proof (measurement 4: ffmpeg only ever DUPLICATES frames
+    to reach a higher output fps, it invents no new content, so a naive
+    output_fps-only bump would pass a timestamp check while being
+    exactly the pointless file the spec's "Do not" section forbids), and
+    the freeze/tick seamlessness proof recomputed for 60fps. Mirrors
+    check_millis_reveal_render's shape and technique (extract a frame
+    with ffmpeg's own decoder, no OCR) for the sister feature's own
+    analogous claims.
+    """
+    from PIL import Image, ImageChops
+
+    print("Timer: millis 60fps -- genuine constant rate + seamlessness")
+
+    # ---- genuine 60fps, probed, not assumed ------------------------------
+    filename = render_timer(
+        {"minutes": 0, "seconds": 6, "style": "classic",
+         "accent": "#e8b44f", "warn_last10": True, "hold_seconds": 2,
+         "show_millis": True, "millis_60fps": True},
+        lambda pct: None)
+    path = os.path.join(EXPORTS_DIR, filename)
+    try:
+        check("filename carries the _60fps descriptor",
+              "_60fps" in filename, "got {0!r}".format(filename))
+        verify("timer/classic-millis-60fps", filename, 8.0)
+
+        info_text = subprocess.run(
+            [FFMPEG, "-hide_banner", "-i", path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+        ).stderr.decode("utf-8", "replace")
+        m = re.search(r"Video:.*?(\d+(?:\.\d+)?) fps", info_text)
+        check("the container reports 60 fps",
+              m is not None and float(m.group(1)) == 60.0,
+              "got {0!r}".format(m.group(0) if m else None))
+
+        pts = _showinfo_pts(path)
+        check("decoded frame count equals duration x 60 exactly "
+              "(8s -> 480)",
+              len(pts) == 480, "got {0} frames".format(len(pts)))
+        deltas = [b - a for a, b in zip(pts, pts[1:])]
+        bad = [d for d in deltas if abs(d - 1.0 / 60) > 0.001]
+        check("every inter-frame pts delta is 1/60s within tolerance "
+              "-- a genuine constant 60fps stream, not a relabeled "
+              "30fps one",
+              not bad,
+              "{0}/{1} deltas off, sample={2!r}".format(
+                  len(bad), len(deltas), bad[:5]))
+
+        hashes = _frame_hashes(path, 60)
+        check("all 60 frames of one ticking second are pairwise "
+              "distinct -- real per-frame content, not 30 unique "
+              "frames each shown twice (the exact failure a "
+              "30-in/60-out mistake would produce)",
+              len(hashes) == 60 and len(set(hashes)) == 60,
+              "got {0} distinct out of {1}".format(
+                  len(set(hashes)), len(hashes)))
+    finally:
+        if os.path.isfile(path):
+            os.unlink(path)
+
+    # ---- seamlessness across the freeze/tick boundary, at 60fps ---------
+    # millis-reveal.md's own 179/180 proof, recomputed for 60fps: NOT a
+    # naive 2x (that gives 358/360 and lands on the wrong side of the
+    # boundary once rounding is accounted for). At 60fps the last frozen
+    # frame is 359 (rem_ms=4017) and the first live frame is 360
+    # (rem_ms=4000) -- checked against _millis_ticking/make_frame's own
+    # formula directly, not trusted blind.
+    filename = render_timer(
+        {"minutes": 0, "seconds": 10, "style": "classic",
+         "accent": "#e8b44f", "warn_last10": False, "hold_seconds": 1,
+         "show_millis": True, "millis_reveal": True,
+         "millis_reveal_seconds": 4, "millis_60fps": True},
+        lambda pct: None)
+    path = os.path.join(EXPORTS_DIR, filename)
+    frame_dir = tempfile.mkdtemp(prefix="sv-smoke-millis60-seam-")
+    try:
+        verify("timer/classic-millis-60fps-reveal", filename, 11.0)
+
+        def extract(idx):
+            frame_path = os.path.join(frame_dir, "f{0}.png".format(idx))
+            proc = subprocess.run(
+                [FFMPEG, "-y", "-i", path,
+                 "-vf", "select='eq(n\\, {0})'".format(idx),
+                 "-vsync", "0", "-frames:v", "1", frame_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            ok = os.path.isfile(frame_path)
+            check("frame {0} extracts cleanly".format(idx), ok,
+                  proc.stderr.decode("utf-8", "replace")[-300:])
+            return frame_path if ok else None
+
+        def lit_mask(frame_path):
+            # Same sum(rgb)>150 convention as millis-reveal.md's own
+            # 30fps proof (check_millis_reveal_render) -- comfortably
+            # between the vignette background and the digit colour.
+            r, g, b = Image.open(frame_path).convert("RGB").split()
+            total = ImageChops.add(ImageChops.add(r, g), b)
+            return total.point(lambda v: 255 if v > 150 else 0)
+
+        f359 = extract(359)
+        f360 = extract(360)
+        if f359 and f360:
+            mask359 = lit_mask(f359)
+            mask360 = lit_mask(f360)
+            bbox359 = mask359.getbbox()
+            bbox360 = mask360.getbbox()
+            check("frame 359 (frozen) has a lit bounding box",
+                  bbox359 is not None, "got {0!r}".format(bbox359))
+            check("frame 360 (live) has a lit bounding box",
+                  bbox360 is not None, "got {0!r}".format(bbox360))
+            check("the lit bounding box is IDENTICAL on frame 359 "
+                  "(frozen) and frame 360 (live) -- the main digits "
+                  "do not move or resize across the freeze/tick "
+                  "boundary at 60fps",
+                  bbox359 == bbox360,
+                  "frame359={0!r} frame360={1!r}".format(
+                      bbox359, bbox360))
+            print("    (observed bounding box: {0!r})".format(bbox359))
+
+            if bbox359 is not None:
+                # The millis run sits in the rightmost ~20% of the
+                # composite box (same convention as check_millis_
+                # reveal_render's own frame-179 check).
+                x0, y0, x1, y1 = bbox359
+                ms_x0 = x1 - int(round((x1 - x0) * 0.20))
+                ms_region = mask359.crop((ms_x0, y0, x1, y1))
+                check("frame 359: the millis region (rightmost 20% "
+                      "of the box) has at least one lit pixel -- the "
+                      "frozen '.000' glyphs are drawn, not blank",
+                      ms_region.getbbox() is not None,
+                      "region {0!r} was completely blank".format(
+                          (ms_x0, y0, x1, y1)))
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        if os.path.isfile(path):
+            os.unlink(path)
+
+
+def check_millis_60fps_alpha_fringe():
+    """docs/specs/millis-60fps.md: millis_60fps composes with transparent
+    + millis_reveal with zero new interaction code -- frozen_base_for's
+    cache key is (text, color, idx), already fps-independent (Decisions
+    section) -- but that claim only means something once actually
+    rendered and pixel-checked, exactly like check_millis_reveal_alpha_
+    fringe already does for the 30fps case. Same shape: a frozen-stretch
+    frame, decoded with alpha kept (-pix_fmt rgba), must show background
+    alpha 0, glyph-interior alpha 255, AND fractional edge alpha --
+    fractional, not just the two extremes, since a binary 0-or-255
+    cutout would still pass the first two checks while reproducing the
+    exact fringe bug alpha-export.md exists to remove.
+    """
+    from PIL import Image
+
+    print("Timer: millis-60fps transparent frozen-stretch alpha "
+          "(frozen_base_for at 60fps)")
+
+    filename = render_timer(
+        {"minutes": 0, "seconds": 6, "style": "classic",
+         "accent": "#e8b44f", "warn_last10": False, "hold_seconds": 1,
+         "show_millis": True, "millis_reveal": True,
+         "millis_reveal_seconds": 2, "millis_60fps": True,
+         "transparent": "qtrle"},
+        lambda pct: None)
+    path = os.path.join(EXPORTS_DIR, filename)
+    frame_dir = tempfile.mkdtemp(prefix="sv-smoke-millis60-alpha-")
+    try:
+        check("filename ends .mov",
+              filename.endswith(".mov"), "got {0!r}".format(filename))
+        check("filename carries both _ms and _60fps descriptors",
+              "_ms" in filename and "_60fps" in filename,
+              "got {0!r}".format(filename))
+
+        # Frame 60 at 60fps is t=1.0s -> rem_ms=5000, frozen while
+        # rem_ms > 2000 -- the 60fps analogue of check_millis_reveal_
+        # alpha_fringe's own frame-30-at-30fps pick, nowhere near the
+        # freeze/tick boundary.
+        frame_path = os.path.join(frame_dir, "frame60.png")
+        proc = subprocess.run(
+            [FFMPEG, "-y", "-i", path,
+             "-vf", "select='eq(n\\, 60)'", "-vsync", "0",
+             "-frames:v", "1", "-pix_fmt", "rgba", frame_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        got_frame = os.path.isfile(frame_path)
+        check("frozen-stretch frame extracts cleanly with alpha kept "
+              "(-pix_fmt rgba)", got_frame,
+              proc.stderr.decode("utf-8", "replace")[-300:])
+        if got_frame:
+            frame = Image.open(frame_path).convert("RGBA")
+            bg_alpha = frame.getpixel((10, 10))[3]
+            check("frozen stretch (60fps): background-area pixel "
+                  "(10, 10) is fully transparent (alpha == 0)",
+                  bg_alpha == 0, "got alpha={0!r}".format(bg_alpha))
+            frame_alpha = frame.split()[-1]
+            lo, hi = frame_alpha.getextrema()
+            has_mid = any(
+                c > 0 for c in frame_alpha.histogram()[1:255])
+            check("frozen stretch (60fps): a glyph-interior pixel is "
+                  "fully opaque (alpha >= 250)", hi >= 250,
+                  "max alpha = {0!r}".format(hi))
+            check("frozen stretch (60fps): at least one glyph-edge "
+                  "pixel has FRACTIONAL alpha (0 < alpha < 255), "
+                  "proving frozen_base_for's alpha=is_alpha "
+                  "compositing still holds at 60fps",
+                  has_mid, "no intermediate alpha value found "
+                           "(lo={0!r} hi={1!r})".format(lo, hi))
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        if os.path.isfile(path):
+            os.unlink(path)
+
+
+def check_millis_60fps_off_stays_30fps():
+    """docs/specs/millis-60fps.md: with millis_60fps absent OR explicitly
+    False, a show_millis countdown must take EXACTLY today's fps=out_fps
+    =30 path -- the "byte-identical when off" claim, proven directly
+    rather than assumed. golden.py --check is the full pixel-hash proof
+    of that claim across every existing job; this is the cheap, fast
+    fps-only half of the same proof, run every time (golden.py's hash
+    jobs only catch a regression if someone remembers to run --check).
+    """
+    print("Timer: millis_60fps off/absent leaves show_millis at 30fps")
+
+    base = {"minutes": 0, "seconds": 6, "style": "classic",
+            "accent": "#e8b44f", "warn_last10": True,
+            "hold_seconds": 2, "show_millis": True}
+    for label, options in (("absent", dict(base)),
+                           ("explicit False", dict(base,
+                                                    millis_60fps=False))):
+        filename = render_timer(options, lambda pct: None)
+        path = os.path.join(EXPORTS_DIR, filename)
+        try:
+            check("millis_60fps {0}: no _60fps filename descriptor"
+                  .format(label),
+                  "_60fps" not in filename, "got {0!r}".format(filename))
+            pts = _showinfo_pts(path)
+            check("millis_60fps {0}: still 30fps (8s -> 240 frames, "
+                  "not 480) -- the default path is untouched"
+                  .format(label),
+                  len(pts) == 240, "got {0} frames".format(len(pts)))
+        finally:
+            if os.path.isfile(path):
+                os.unlink(path)
+
+    # The mirror case, which the spec requires proven and nothing did:
+    # 60 fps ticked with Show milliseconds OFF must change nothing. The UI
+    # now greys the box out, but a disabled box keeps its tick and still
+    # reaches the payload, so the renderer is the real guarantee. Compared
+    # frame by frame against a plain render, not by fps alone -- a frame
+    # count proves the rate, not that the pixels are unchanged.
+    plain = {"minutes": 0, "seconds": 6, "style": "classic",
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2}
+    paths = []
+    try:
+        for options in (plain, dict(plain, millis_60fps=True)):
+            fn = render_timer(options, lambda pct: None)
+            paths.append(os.path.join(EXPORTS_DIR, fn))
+        check("millis_60fps with show_millis OFF: no _60fps or _ms "
+              "descriptor",
+              "_60fps" not in paths[1] and "_ms" not in paths[1],
+              "got {0!r}".format(os.path.basename(paths[1])))
+        # 8s at the plain 15fps path -> 120 frames.
+        check("millis_60fps with show_millis OFF: identical pixels to a "
+              "plain timer, every one of 120 frames",
+              _frame_hashes(paths[0], 120) == _frame_hashes(paths[1], 120),
+              "frames differ")
+    finally:
+        for path in paths:
+            if os.path.isfile(path):
+                os.unlink(path)
 
 
 def check_https_goes_through_netutil():
@@ -2755,6 +3181,16 @@ def main():
     check_millis_reveal_render()
     print()
     check_millis_reveal_alpha_fringe()
+    print()
+    check_millis_60fps_pure()
+    print()
+    check_millis_60fps_validation()
+    print()
+    check_millis_60fps_render()
+    print()
+    check_millis_60fps_alpha_fringe()
+    print()
+    check_millis_60fps_off_stays_30fps()
     print()
     check_boot_marker_is_packaged_only()
     print()

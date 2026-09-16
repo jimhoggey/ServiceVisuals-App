@@ -310,7 +310,7 @@
             blur, blur && blur.nextElementSibling];
   }
 
-  function applyTimerBg() {
+  function applyTimerBg(isClockMode) {
     var green = $("timer-bg-green").getAttribute("aria-pressed") === "true";
     var transparent = $("timer-bg-transparent").getAttribute("aria-pressed") === "true";
     // Transparent (spec: docs/specs/alpha-export.md) hides the image UI for
@@ -405,11 +405,28 @@
     // The shared preview caption is hardcoded "H.264 MP4" across four
     // tiles, which stops being true the moment TRANSPARENT is on --
     // that export is a .mov. Correct it for this tile only.
+    //
+    // Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
+    // this line also names the real output fps, so it must say 60 the
+    // moment that's actually what will render -- countdown mode, millis
+    // on, AND the box itself checked (applyTimerMode() already ran this
+    // pass and auto-unchecked it past the 15-minute cap, so reading the
+    // checkbox directly here is the true, corrected state).
     var specLine = $("timer-spec-line");
     if (specLine) {
+      var showMillisOn = $("timer-show-millis").checked;
+      var millis60fpsLive = !isClockMode && showMillisOn &&
+          $("timer-millis-60fps").checked;
+      // Plain timers export at 15fps (TIMER_OUTPUT_FPS in
+      // render/timer.py) -- the digits change once a second, so more
+      // frames buy nothing. This caption said 30fps for them; the real
+      // rates were confirmed from golden.py's decoded frame counts: 15
+      // plain, 30 with milliseconds, 60 with smoother milliseconds.
+      var fpsTag = !showMillisOn ? "15fps"
+          : (millis60fpsLive ? "60fps" : "30fps");
       specLine.textContent = transparent
-          ? "1920x1080 - 30fps - .mov with transparency"
-          : "1920x1080 - 30fps - H.264 MP4";
+          ? "1920x1080 - " + fpsTag + " - .mov with transparency"
+          : "1920x1080 - " + fpsTag + " - H.264 MP4";
     }
     // Same problem on the button itself: it is hardcoded
     // "EXPORT MP4" in the markup, and a transparent export is a
@@ -504,6 +521,12 @@
       millisFullSize: $("timer-millis-full-size").checked,
       millisReveal: $("timer-millis-reveal").checked,
       millisRevealSeconds: toInt($("timer-millis-reveal-seconds").value, 60),
+      // Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
+      // countdown-only, read unconditionally like millisFullSize above --
+      // timerPayload() is what keeps it out of the clock branch. Reflects
+      // applyTimerMode()'s disable/auto-uncheck-past-15-min correction,
+      // which always runs earlier in the same updateTimer() pass.
+      millis60fps: $("timer-millis-60fps").checked,
       greenScreen: green,
       transparent: transparentOn ?
           (transparentFormatEl ? transparentFormatEl.value : "qtrle") : false,
@@ -585,8 +608,14 @@
     var bgErr = validateTimerBg();
     if (bgErr) return bgErr;
     if (t.mode === "clock") return validateTimerClockStart() || validateTimerClockLength();
+    // The seconds box only means something while milliseconds are shown
+    // AND holding at zero. Checking it unconditionally blocked a plain
+    // quick timer whenever that box -- hidden by then -- had been left
+    // empty: an error about a feature the operator had switched off,
+    // pointing at a field they could no longer see.
     return validateTimerDuration() || validateTimerHold() ||
-        validateTimerMillisRevealSeconds();
+        (t.showMillis && t.millisReveal
+            ? validateTimerMillisRevealSeconds() : null);
   }
 
   // Same display rule as the renderer: unpadded minutes, H:MM:SS above 1 hour.
@@ -926,7 +955,12 @@
       var total = t.minutes * 60 + t.seconds;
       // Addendum (v1.23.0): millis on -> flat 30fps input, same as clock
       // mode's millis path (docs/specs/clock-mode.md addendum "Frame rate").
-      var fps2 = t.showMillis ? 30
+      // Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
+      // countdown-only -- doubles that input fps to 60 when checked (and
+      // not past the 15-minute cap, which applyTimerMode() already
+      // enforces by unchecking the box), so this estimate reflects the
+      // real ~2x render-time cost before the operator exports.
+      var fps2 = t.showMillis ? (t.millis60fps ? 60 : 30)
         : (t.style === "classic" ? 1 : (total <= 600 ? 10 : (total <= 1800 ? 4 : 2)));
       frames = (total + t.hold) * fps2;
     }
@@ -970,6 +1004,34 @@
     if (millisOn) $("timer-clock-show-seconds").checked = true;
     $("timer-clock-show-seconds").disabled = millisOn;
 
+    // Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
+    // countdown-only -- hidden outright in clock mode (unlike its sibling
+    // millis controls above, which stay visible-but-inert there) because
+    // clock mode has no "total duration" for the 15-minute cap below to
+    // mean anything against. Same hide mechanism as BAR above.
+    $("timer-millis-60fps-row").hidden = isClock;
+    $("timer-millis-60fps-hint").hidden = isClock;
+    if (!isClock) {
+      // Mirrors MILLIS_MAX_SECONDS_60FPS in validation.py: 900s (15 min) --
+      // a tighter cap than plain millis' 1800s because 60fps roughly
+      // doubles the frame count for the same duration. `>`, not `>=`: a
+      // 15:00 timer is exactly 900s and is the owner's real use case, so
+      // it must stay enabled exactly at that boundary.
+      var total60 = Math.max(0, toInt($("timer-minutes").value, 0) * 60 +
+          toInt($("timer-seconds").value, 0));
+      var over60fpsCap = total60 > 900;
+      var box60fps = $("timer-millis-60fps");
+      box60fps.disabled = over60fpsCap;
+      box60fps.title = over60fpsCap
+          ? "Needs 15 minutes or less. Shorten the timer to use " +
+              "smoother milliseconds."
+          : "";
+      // A disabled control must never stay checked -- same auto-fallback
+      // pattern as BAR->CLASSIC above -- or the payload would carry
+      // millis_60fps: true into a render the server rejects.
+      if (over60fpsCap && box60fps.checked) box60fps.checked = false;
+    }
+
     return mode;
   }
 
@@ -977,15 +1039,47 @@
     var mode = applyTimerMode();
     // Backgrounds group is visible (and validated) in BOTH modes, so this
     // runs unconditionally rather than inside either branch below.
-    applyTimerBg();
+    applyTimerBg(mode === "clock");
     var t = readTimer();
     // Hold-at-zero's seconds field (spec: docs/specs/millis-reveal.md):
     // visible in BOTH modes, same reasoning as Fixed format in the same
     // group -- only the countdown payload actually sends it. Its hint text
     // is only recomputed below in the countdown branch; in clock mode it
     // just keeps showing the neutral range description already in the HTML.
-    $("timer-millis-reveal-seconds-field").hidden = !t.millisReveal;
-    $("timer-millis-reveal-seconds-hint").hidden = !t.millisReveal;
+    // Shown only while it can matter: a leftover ticked Hold at zero with
+    // milliseconds off otherwise left its seconds box on screen for a
+    // feature that was switched off.
+    // ...and only in countdown mode. The hint's TEXT is recomputed in the
+    // countdown branch alone, so a red error typed there stayed on screen,
+    // frozen and uneditable, after switching to clock mode -- where the
+    // box is never sent and means nothing. Same guard the fps caption and
+    // the render estimate already use.
+    var revealLive = mode !== "clock" && t.showMillis && t.millisReveal;
+    $("timer-millis-reveal-seconds-field").hidden = !revealLive;
+    $("timer-millis-reveal-seconds-hint").hidden = !revealLive;
+    // Full-size, hold-at-zero and 60 fps only change a render that SHOWS
+    // milliseconds. With Show milliseconds off the renderer never leaves
+    // its plain 15fps path whatever is ticked, so grey them out -- or a
+    // volunteer making a quick timer can tick 60 fps and reasonably
+    // wonder whether it slowed the export. Ticked state is kept, not
+    // cleared, so turning milliseconds back on restores the choice.
+    // applyTimerMode() above has already disabled 60 fps past 15
+    // minutes: only ever ADD disabled here, never clear it, or that cap
+    // would be silently undone.
+    var millisOff = !t.showMillis;
+    $("timer-millis-full-size").disabled = millisOff;
+    $("timer-millis-reveal").disabled = millisOff;
+    $("timer-millis-reveal-seconds").disabled = millisOff;
+    if (millisOff) $("timer-millis-60fps").disabled = true;
+    // Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
+    // the "Show milliseconds" hint just above names a specific fps, so it
+    // goes stale the instant that real number changes. Same three-way
+    // condition as the live spec-line in applyTimerBg() above, so the two
+    // labels never disagree with each other.
+    $("timer-show-millis-hint").textContent =
+        (mode !== "clock" && t.showMillis && t.millis60fps)
+            ? "Renders at 60 fps — longer to export"
+            : "Renders at 30 fps — longer to export";
     var bgErr = validateTimerBg();
     var bgHint = $("timer-bg-seconds-hint");
     bgHint.textContent = bgErr || "Each image holds this long, then the next one shows.";
@@ -1005,7 +1099,12 @@
     } else {
       var durationErr = validateTimerDuration();
       var holdErr = validateTimerHold();
-      var revealSecondsErr = validateTimerMillisRevealSeconds();
+      // Same rule as validateTimer(): the seconds box only counts while
+      // milliseconds are shown AND holding at zero. This check exists
+      // twice (here it drives the Export button; there, the submit),
+      // and fixing only one left a plain timer greyed out.
+      var revealSecondsErr = (t.showMillis && t.millisReveal)
+          ? validateTimerMillisRevealSeconds() : null;
       err = durationErr || holdErr || revealSecondsErr || bgErr;
       var hint = $("timer-duration-hint");
       hint.textContent = durationErr || ($("timer-show-millis").checked ? "5 seconds to 30 minutes with milliseconds" : "5 seconds to 120 minutes");
@@ -1091,7 +1190,16 @@
         // clock branch above.
         millis_full_size: t.millisFullSize,
         millis_reveal: t.millisReveal,
-        millis_reveal_seconds: t.millisRevealSeconds,
+        // Only the operator's value while it is in use; otherwise the
+        // server's own default. Sending a stale empty box (null) made
+        // validation.py reject a plain timer for the same reason as above.
+        millis_reveal_seconds: (t.showMillis && t.millisReveal)
+            ? t.millisRevealSeconds : 60,
+        // Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
+        // countdown-only like the millis keys above -- never sent in the
+        // clock branch, which never reads it (spec: "Countdown only, not
+        // clock mode").
+        millis_60fps: t.millis60fps,
         // Backgrounds (spec: docs/specs/timer-backgrounds.md).
         backgrounds: t.backgrounds,
         bg_seconds: t.bgSeconds,

@@ -48,6 +48,11 @@ TIMER_STYLES = ("classic", "ring", "bar")
 # build. ("qtrle", "prores") today.
 TRANSPARENT_FORMATS = tuple(ALPHA_FORMATS)
 MILLIS_MAX_SECONDS = 1800        # countdown ceiling when milliseconds are on
+# docs/specs/millis-60fps.md: a TIGHTER ceiling layered on top of the one
+# above, checked first, only when millis_60fps is also on. 900s x 60fps ==
+# 1800s x 30fps == 54,000 frames -- turning 60fps on can never make the
+# worst case slower/bigger than what already ships today.
+MILLIS_MAX_SECONDS_60FPS = 900
 CLOCK_FORMATS = ("12h", "24h")
 # HH:MM:SS, 24-hour, zero-padded — the exact shape the "Shows as ..." hint
 # and the renderer both expect. fullmatch()'d, so trailing junk is rejected.
@@ -155,6 +160,25 @@ def _validate_countdown_options(options):
             '"Hold at zero until the end" must be true or false.')
     millis_reveal_seconds = _millis_reveal_seconds_field(options)
 
+    # A third independent countdown-only option (docs/specs/millis-60fps.md),
+    # same "accepted regardless of show_millis" shape as the two above --
+    # inert when millis are off. No cross-field checks against the other two
+    # or against style/total: the spec's own measurements found nothing to
+    # refuse beyond the duration ceiling below.
+    millis_60fps = options.get("millis_60fps", False)
+    if not isinstance(millis_60fps, bool):
+        raise ValidationError(
+            '"Smoother milliseconds (60 fps)" must be true or false.')
+
+    # Layered duration ceilings: the 60fps cap is checked FIRST because it
+    # is the tighter bound -- a 20-minute request with millis_60fps on must
+    # get the 15-minute message, not the 30-minute one, even though it also
+    # exceeds the wider ceiling below. With millis_60fps off this is exactly
+    # today's single check.
+    if show_millis and millis_60fps and total > MILLIS_MAX_SECONDS_60FPS:
+        raise ValidationError(
+            "With smoother milliseconds (60 fps) on, the timer can run "
+            "for at most 15 minutes. Turn 60 fps off for a longer timer.")
     if show_millis and total > MILLIS_MAX_SECONDS:
         raise ValidationError(
             "With milliseconds on, the timer can run for at most 30 minutes. "
@@ -172,6 +196,7 @@ def _validate_countdown_options(options):
         "millis_full_size": millis_full_size,
         "millis_reveal": millis_reveal,
         "millis_reveal_seconds": millis_reveal_seconds,
+        "millis_60fps": millis_60fps,
     }
     clean.update(_timer_background_options(options))
     return clean
