@@ -29,6 +29,16 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.32.0": [
+        "YouTube download: tick BATCH and paste a list of links — three "
+        "download at a time.",
+        "Every link reports its own result, and RETRY FAILED re-runs only "
+        "the ones that failed.",
+        "Downloads are named after the video title, not underscores with "
+        "an id on the end.",
+        "Fixed: an age-restricted video was reported as a robot check and "
+        "retried for nothing.",
+    ],
     "1.31.0": [
         "Timer: tick \"Fixed 00:00:00 format\" and every countdown reads "
         "00:05:00 or 00:00:30 — same size at any length.",
