@@ -1634,11 +1634,14 @@ input[type="range"] {
    job, which keeps showing .done-note/.done-filename above instead. */
 .download-results { margin: 0 0 14px; }
 
+/* The summary is the answer to "is it finished?", so it reads at the
+   weight the single filename used to -- at 12px/--ink-dim it sat
+   under the list like a footnote and an operator had to count rows. */
 .results-summary {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink-dim);
+  font-size: 13px;
+  color: var(--ink);
 }
 
 .results-list {

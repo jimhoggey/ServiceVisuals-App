@@ -453,14 +453,23 @@ DOWNLOAD_FORMATS = ("mp4", "mp3")
 # not unlimited.
 BATCH_MAX_LINKS = 50
 BATCH_LINE_ERROR = (
-    "Line {0} isn't a YouTube link — paste one YouTube link per line.")
+    "Link {0} isn't a YouTube link — separate links with a comma or "
+    "a new line.")
+
+# batch-download.md, "Separators": a new line and a comma are the same
+# separator. Splitting on a comma cannot break a link the operator
+# meant to keep -- no YouTube link contains one (ids are [A-Za-z0-9_-]
+# and none of YouTube's query parameters use a comma) -- and one that
+# somehow did would fail the per-link check in front of them rather
+# than downloading something else quietly.
+_BATCH_SEPARATORS = re.compile(r"[,\r\n]")
 
 
 def _checked_download_url(url, on_invalid):
     """The one YouTube-link rulebook (host, scheme, length) a bare `url`
     and a batch line both answer to -- only the ValidationError they
     raise on failure differs, so the single-link path keeps its own
-    message untouched while a batch line gets its own line number."""
+    message untouched while a batch entry gets its own position."""
     if not isinstance(url, str):
         raise on_invalid
     url = url.strip()
@@ -475,10 +484,11 @@ def _checked_download_url(url, on_invalid):
 
 
 def _clean_batch_urls(raw):
-    """Blank entries ignored, duplicates dropped (keep first occurrence),
-    whitespace stripped -- done here, not only in the textarea that fed
-    it, so the contract holds for any caller and a 40-line paste with a
-    few repeats doesn't burn through the 50-link cap on repeats alone.
+    """Entries split on commas and new lines alike, blanks ignored,
+    duplicates dropped (keep first occurrence), whitespace stripped --
+    done here, not only in the textarea that fed it, so the contract
+    holds for any caller and a 40-line paste with a few repeats
+    doesn't burn through the 50-link cap on repeats alone.
     A non-string entry (a stray JSON null/number) is left alone rather
     than guessed at; the per-link check below rejects it the same way a
     bad `url` string is rejected today.
@@ -486,14 +496,20 @@ def _clean_batch_urls(raw):
     seen = set()
     cleaned = []
     for item in raw:
-        text = item.strip() if isinstance(item, str) else item
-        if text == "":
-            continue
-        if isinstance(text, str):
-            if text in seen:
+        # Split here as well as in the textarea that fed it, so
+        # {"urls": ["a,b"]} and {"urls": ["a", "b"]} are the same
+        # request for any caller, not just the tile.
+        pieces = (_BATCH_SEPARATORS.split(item)
+                  if isinstance(item, str) else [item])
+        for piece in pieces:
+            text = piece.strip() if isinstance(piece, str) else piece
+            if text == "":
                 continue
-            seen.add(text)
-        cleaned.append(text)
+            if isinstance(text, str):
+                if text in seen:
+                    continue
+                seen.add(text)
+            cleaned.append(text)
     return cleaned
 
 

@@ -979,10 +979,56 @@ def check_download():
               {"urls": ["https://youtu.be/a", "https://youtu.be/b"],
                "format": "mp4"})
 
+    # batch-download.md, "Separators": a comma and a new line are the
+    # same separator, so every shape below is the same two-link batch.
+    two = {"urls": ["https://youtu.be/a", "https://youtu.be/b"],
+           "format": "mp4"}
+    expect_ok("a comma splits one entry into two links",
+              {"urls": ["https://youtu.be/a,https://youtu.be/b"]}, two)
+    expect_ok("a comma with spaces around it splits the same way",
+              {"urls": ["https://youtu.be/a , https://youtu.be/b"]},
+              two)
+    expect_ok("a new line inside one entry splits it too",
+              {"urls": ["https://youtu.be/a\nhttps://youtu.be/b"]},
+              two)
+    expect_ok("a Windows paste (\\r\\n) splits and leaves no \\r behind",
+              {"urls": ["https://youtu.be/a\r\nhttps://youtu.be/b"]},
+              two)
+    expect_ok("a trailing comma does not become a blank link",
+              {"urls": ["https://youtu.be/a,https://youtu.be/b,"]}, two)
+    expect_ok("repeated separators collapse",
+              {"urls": ["https://youtu.be/a,,\n,https://youtu.be/b"]},
+              two)
+    expect_ok("commas and new lines mix freely",
+              {"urls": ["https://youtu.be/a,https://youtu.be/b\n"
+                        "https://youtu.be/c"]},
+              {"urls": ["https://youtu.be/a", "https://youtu.be/b",
+                        "https://youtu.be/c"], "format": "mp4"})
+    expect_ok("a duplicate is dropped across different separators",
+              {"urls": ["https://youtu.be/a,https://youtu.be/b",
+                        "https://youtu.be/a"]}, two)
+    expect_ok("one link per entry still behaves exactly as before",
+              {"urls": ["https://youtu.be/a", "https://youtu.be/b"]},
+              two)
+
+    expect_error("a comma-split piece that is not a link names its "
+                 "position in the SPLIT list",
+                 {"urls": ["https://youtu.be/a,not a url"]},
+                 validation.BATCH_LINE_ERROR.format(2))
+    # 26 entries of two links each is 52 -- the cap counts links, not
+    # pasted lines, so a comma list cannot smuggle past it.
+    pairs = ["https://youtu.be/x{0:03d},https://youtu.be/y{0:03d}".format(i)
+             for i in range(26)]
+    expect_error("splitting counts toward the 50-link cap",
+                 {"urls": pairs},
+                 "A batch can hold up to 50 links at once.")
+
     expect_error("an empty urls list is today's url error",
                  {"urls": []}, url_error)
     expect_error("a urls list of only blank lines is today's url error",
                  {"urls": ["", "   ", "\n"]}, url_error)
+    expect_error("a urls list of only separators is the url error too",
+                 {"urls": [",", " , ", ",\n,"]}, url_error)
     expect_error("a non-list urls value falls back to the url error",
                  {"urls": "not-a-list"}, url_error)
 
@@ -999,10 +1045,11 @@ def check_download():
         "a non-string entry is a bad line too, not a crash",
         {"urls": ["https://youtu.be/a", 42]},
         validation.BATCH_LINE_ERROR.format(2))
-    check("the batch line message matches the spec text exactly",
+    check("the batch link message matches the spec text exactly",
           validation.BATCH_LINE_ERROR.format(4)
-          == "Line 4 isn't a YouTube link — paste one YouTube link per "
-             "line.", validation.BATCH_LINE_ERROR.format(4))
+          == "Link 4 isn't a YouTube link — separate links with a "
+             "comma or a new line.",
+          validation.BATCH_LINE_ERROR.format(4))
 
     check("BATCH_MAX_LINKS is 50", validation.BATCH_MAX_LINKS == 50,
           "got {0!r}".format(validation.BATCH_MAX_LINKS))
@@ -2023,6 +2070,34 @@ def check_https_goes_through_netutil():
           not offenders, ", ".join(offenders))
 
 
+def check_download_done_panel():
+    """batch-download.md: the finished panel answers "is it done?"
+    and DOWNLOAD ANOTHER starts the next one instead of repeating
+    the last. Both live in the browser, so they are verified by
+    driving the tile -- these are tripwires so a refactor cannot
+    quietly drop either back to what an operator misread once."""
+    print()
+    print("Download: the finished panel")
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(here, "static", "js", "download.js"),
+              encoding="utf-8") as f:
+        js = f.read()
+
+    check("a finished batch says so as a whole sentence",
+          '"All " + items.length + " are saved in your exports folder."'
+          in js)
+    check("a finished single download keeps its own sentence",
+          '"Saved to your exports folder."' in js)
+    check("the last filename is hidden behind a batch's own list",
+          '$("download-filename").hidden = true;' in js)
+    check("DOWNLOAD ANOTHER cancels the submit rather than re-running",
+          "e.preventDefault();" in js and
+          '$("download-done").hidden) return;' in js)
+    check("DOWNLOAD ANOTHER empties both link fields",
+          '$("download-url").value = "";' in js and
+          '$("download-urls").value = "";' in js)
+
+
 def check_js_modules():
     """static/js/ is seven plain script files sharing one `SV` object, with
     no bundler to notice a tile calling something it never imported. That
@@ -2174,6 +2249,7 @@ def main():
 
     check_batch_download()
     print()
+    check_download_done_panel()
     check_js_modules()
     print()
 

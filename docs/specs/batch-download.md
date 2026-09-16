@@ -25,16 +25,40 @@ exactly as it does today, including its single-line field.
 
 A **BATCH** checkbox sits under FORMAT (`timer`-style `.check-row`,
 `id="download-batch"`, default off). Hint: `Paste several links, one per
-line — they download three at a time.`
+line or separated by commas — they download three at a time.`
 
 | Batch off | Batch on |
 |---|---|
 | Today's single-line `#download-url`, unchanged. | `#download-url` hidden, a `<textarea id="download-urls">` in its place, 6 rows. |
 | Button reads `DOWNLOAD`. | Button reads `DOWNLOAD 12` — the live count of valid links. `DOWNLOAD` when the box is empty. |
-| Hint as today. | `12 links found.` / `Line 4 isn't a YouTube link.` (first offending line only) |
+| Hint as today. | `12 links found.` / `Link 4 isn't a YouTube link.` (first offending link only) |
 
-Blank lines ignored; duplicates removed silently (keep first occurrence);
-surrounding whitespace stripped. The set caps at **50**.
+Blank entries ignored; duplicates removed silently (keep first
+occurrence); surrounding whitespace stripped. The set caps at **50**.
+
+### Separators
+
+A new line and a comma are the **same separator**, and may be mixed
+freely: `a\nb`, `a,b`, `a, b` and `a,b\nc` all parse to the same list.
+`\r\n` counts as a new line (a paste from Windows). Trailing and
+repeated separators collapse, because every piece is stripped and
+blanks are dropped before anything is validated — so `a, b,` is two
+links, not three.
+
+Splitting on a comma is safe rather than clever: no YouTube link
+contains one. Video and playlist ids are `[A-Za-z0-9_-]`, and none of
+the query parameters YouTube hands out (`v`, `list`, `index`, `t`,
+`si`, `pp`) use a comma. A comma is nevertheless a legal URL
+character, so the tradeoff is recorded here: a link that did contain
+one would be split, and **both halves would fail the per-link check**
+with the message below. It fails in front of the operator rather than
+downloading the wrong thing quietly.
+
+**Both sides split.** The textarea splits for the live count, and
+`validate_download_options` splits every entry of a submitted `urls`
+list again. The contract therefore holds for any caller, not only the
+tile: `{"urls": ["a,b"]}` and `{"urls": ["a", "b"]}` are the same
+request. This is the rule the JS and Python must keep identical.
 
 While running, the status line reads `DOWNLOADING 7 OF 20…` and the bar
 tracks completed items, not bytes. `SAVED` on completion as today.
@@ -69,8 +93,9 @@ containing only the failed links.
   one-element batch. A payload with neither → today's URL error.
 - Each entry validated exactly as `url` is today (same host list, same
   500-char cap, same message). A bad entry in a list →
-  *"Line {n} isn't a YouTube link — paste one YouTube link per line."*
-  (n is 1-based over the **submitted list**, not the raw textarea.)
+  *"Link {n} isn't a YouTube link — separate links with a comma or a
+  new line."* (n is 1-based over the **cleaned, split** list, not the
+  raw textarea — blanks and duplicates are already gone.)
 - More than 50 → *"A batch can hold up to 50 links at once."*
 - Empty list → today's URL error.
 

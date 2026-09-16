@@ -3,7 +3,8 @@
    progress bar, done panel) is the whole view. Loaded after core.js.
 
    Batch (docs/specs/batch-download.md): tick BATCH to swap the single
-   #download-url field for a #download-urls textarea, one link per line.
+   #download-url field for a #download-urls textarea, links separated
+   by new lines or commas (the two are interchangeable).
    readDownload().urls is always an array — with BATCH off it is a
    zero-or-one-element array, so the single-link path is just a
    one-element batch, mirroring the API contract's "one downstream
@@ -67,16 +68,18 @@
     return YOUTUBE_HOSTS.indexOf(parsed.hostname.toLowerCase()) !== -1;
   }
 
-  // Blank lines ignored; duplicates removed silently (keep first
-  // occurrence); surrounding whitespace stripped — exactly what the
-  // backend does to a submitted `urls` list, so a validation error's line
-  // number lines up with what validateBatchUrls() below reports (1-based
-  // over THIS parsed set, not the raw textarea).
+  // A comma and a new line are the same separator and may be mixed
+  // (batch-download.md, "Separators"); blank pieces ignored; duplicates
+  // removed silently (keep first occurrence); surrounding whitespace
+  // stripped — the SAME rule _clean_batch_urls applies in validation.py,
+  // so the count on the button and the position in a validation error
+  // both line up with what the backend would say (1-based over THIS
+  // parsed set, not the raw textarea).
   function parseDownloadUrls(text) {
     var seen = {};
     var out = [];
-    text.split("\n").forEach(function (line) {
-      var t = line.trim();
+    text.split(/[,\r\n]/).forEach(function (piece) {
+      var t = piece.trim();
       if (!t || seen[t]) return;
       seen[t] = true;
       out.push(t);
@@ -114,7 +117,7 @@
     if (urls.length > BATCH_MAX) return "A batch can hold up to 50 links at once.";
     for (var i = 0; i < urls.length; i++) {
       if (!isValidDownloadUrl(urls[i])) {
-        return "Line " + (i + 1) + " isn't a YouTube link — paste one YouTube link per line.";
+        return "Link " + (i + 1) + " isn't a YouTube link — separate links with a comma or a new line.";
       }
     }
     return null;
@@ -182,7 +185,7 @@
       var lineErr = validateBatchUrls(d.urls);
       if (d.urls.length === 0) {
         // Empty is not a mistake yet — same principle as the single field.
-        hint.textContent = "Paste YouTube links, one per line — up to " + BATCH_MAX + ".";
+        hint.textContent = "Paste YouTube links, one per line or comma-separated — up to " + BATCH_MAX + ".";
         hint.classList.remove("is-bad");
       } else if (lineErr) {
         hint.textContent = lineErr;
@@ -291,12 +294,17 @@
       wrap.hidden = true;
       retryBtn.hidden = true;
       note.hidden = false;
+      $("download-filename").hidden = false;
       return;
     }
 
     lastResultItems = items;
     note.hidden = true;
     wrap.hidden = false;
+    // core.js fills -filename with the LAST file saved, which in a
+    // batch reads as though it were the only one. The list below
+    // names every file, so the stray headline is removed.
+    $("download-filename").hidden = true;
 
     while (list.firstChild) list.removeChild(list.firstChild);
 
@@ -308,12 +316,30 @@
       list.appendChild(buildDownloadResultRow(item));
     });
 
-    var parts = [];
-    if (counts.saved) parts.push(counts.saved + " saved");
-    if (counts.failed) parts.push(counts.failed + " failed");
-    if (counts.skipped) parts.push(counts.skipped + " already there");
-    $("download-results-summary").textContent =
-      parts.length ? parts.join(", ") : items.length + " processed";
+    // The old summary was "9 saved" in small text, sitting UNDER the
+    // last file's name — an operator who had just downloaded nine
+    // songs had to read the whole list to work out the job was over.
+    // When nothing failed, the job IS over, so say so in one sentence.
+    // Only a mixed result needs the per-state breakdown.
+    var settled = counts.saved + counts.skipped;
+    var summary;
+    if (!counts.failed && settled === items.length) {
+      summary = items.length === 1
+        ? "Saved to your exports folder."
+        : "All " + items.length + " are saved in your exports folder.";
+      if (counts.skipped) {
+        summary += " " + counts.skipped +
+          (counts.skipped === 1 ? " was" : " were") + " already there.";
+      }
+    } else {
+      var parts = [];
+      if (counts.saved) parts.push(counts.saved + " saved");
+      if (counts.failed) parts.push(counts.failed + " failed");
+      if (counts.skipped) parts.push(counts.skipped + " already there");
+      summary = parts.length ? parts.join(", ") + "."
+                             : items.length + " processed.";
+    }
+    $("download-results-summary").textContent = summary;
 
     retryBtn.hidden = counts.failed === 0;
     retryBtn.textContent = "RETRY FAILED (" + counts.failed + ")";
@@ -404,6 +430,26 @@
     var err = validateDownload();
     if (err) { showError("download", err); return; }
     startExport("download", downloadPayload());
+  });
+
+  // DOWNLOAD ANOTHER used to re-submit the list that had just
+  // finished: it is the form's submit button, so clicking it after a
+  // nine-song batch downloaded all nine again — never what "another"
+  // means. In the finished state it now empties the box and returns
+  // the tile to a clean form. preventDefault() on the button's own
+  // click is what stops the submit, so core.js never starts a job.
+  $("download-export").addEventListener("click", function (e) {
+    if (exportBusy["download"]) return;
+    if ($("download-done").hidden) return;    // nothing finished yet
+    e.preventDefault();
+    $("download-url").value = "";
+    $("download-urls").value = "";
+    lastDoneUrl = "";
+    lastDoneBatchKey = "";
+    lastResultItems = [];
+    $("download-filename").hidden = false;
+    SV.clearExportState("download");
+    $(isBatchMode() ? "download-urls" : "download-url").focus();
   });
 
   SV.wireTileForm("download", downloadTile, { autoUpdate: true });
