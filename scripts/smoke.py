@@ -561,10 +561,18 @@ def check_clock_validation():
     # never heard of it either.
     # Addendum (alpha-export.md): transparent defaults to False, a fifth
     # Background-group default for the same reason.
+    # Addendum (millis-reveal.md): three more countdown-only defaults --
+    # millis_full_size/millis_reveal both False, millis_reveal_seconds 60
+    # -- sitting alongside fixed_format for a caller that never heard of
+    # this feature either. This fixture predates the feature, which is
+    # why it needs updating here rather than validate_timer_options being
+    # wrong (docs/specs/millis-reveal.md, Validation + smoke agent).
     expected = {"minutes": 1, "seconds": 0, "style": "ring",
                 "accent": "#e8b44f", "warn_last10": False,
                 "hold_seconds": 3, "show_millis": False,
                 "fixed_format": False,
+                "millis_full_size": False, "millis_reveal": False,
+                "millis_reveal_seconds": 60,
                 "backgrounds": [], "bg_seconds": 10, "bg_dim": 45,
                 "bg_blur": False, "green_screen": False,
                 "transparent": False}
@@ -2261,6 +2269,292 @@ def check_fixed_format():
               dict(clock, fixed_format=True)))
 
 
+def check_millis_size_and_ticking():
+    """docs/specs/millis-reveal.md: the two new pure functions that decide
+    the countdown millis run's font size and its freeze/tick boundary.
+    Exercised directly -- _digits_metrics is already used this way
+    throughout this file -- so these run everywhere, including CI.
+    """
+    from render.timer import (
+        CLOCK_MS_SCALE, _digits_metrics, _millis_size, _millis_ticking)
+
+    print("Timer: millis size + freeze/tick boundary (pure)")
+
+    off = _millis_size(200, False)
+    check("_millis_size(size, False) is today's CLOCK_MS_SCALE ratio",
+          off == max(1, int(round(200 * CLOCK_MS_SCALE))),
+          "got {0!r}".format(off))
+    on = _millis_size(200, True)
+    check("_millis_size(size, True) returns the main size unchanged",
+          on == 200, "got {0!r}".format(on))
+
+    # Full-size millis must match the main digits' glyph metrics exactly,
+    # not just approximately -- the whole point of the option is that
+    # the millis run is drawn at the SAME size as the main digits.
+    met_main = _digits_metrics(200)
+    met_full_ms = _digits_metrics(_millis_size(200, True))
+    check("full-size millis glyph_h matches the main digits' glyph_h",
+          met_full_ms["glyph_h"] == met_main["glyph_h"],
+          "main={0!r} ms={1!r}".format(
+              met_main["glyph_h"], met_full_ms["glyph_h"]))
+    check("full-size millis slot matches the main digits' slot",
+          met_full_ms["slot"] == met_main["slot"],
+          "main={0!r} ms={1!r}".format(
+              met_main["slot"], met_full_ms["slot"]))
+
+    # _millis_ticking(rem_ms, millis_reveal, millis_reveal_seconds) is
+    # inclusive at the boundary ("The freeze/tick boundary") -- these
+    # are the same numbers check_millis_reveal_render() below crosses
+    # for real, at 30fps with a 4s threshold (boundary rem_ms=4000).
+    check("before the threshold: frozen (not ticking)",
+          _millis_ticking(4033, True, 4) is False,
+          "got {0!r}".format(_millis_ticking(4033, True, 4)))
+    check("at the threshold boundary: ticking (inclusive)",
+          _millis_ticking(4000, True, 4) is True,
+          "got {0!r}".format(_millis_ticking(4000, True, 4)))
+    check("after the threshold: ticking",
+          _millis_ticking(1500, True, 4) is True,
+          "got {0!r}".format(_millis_ticking(1500, True, 4)))
+    check("millis_reveal off: always ticking regardless of rem_ms",
+          _millis_ticking(999999, False, 4) is True,
+          "got {0!r}".format(_millis_ticking(999999, False, 4)))
+    check("degenerate reveal_seconds >= total: ticking at frame 0",
+          _millis_ticking(10 * 1000, True, 15) is True,
+          "got {0!r}".format(_millis_ticking(10 * 1000, True, 15)))
+
+
+def check_millis_reveal_validation():
+    """validation._validate_countdown_options: the 3 new millis-reveal
+    fields (docs/specs/millis-reveal.md) -- defaults, both type errors,
+    the range error, the accepted "both true" combination, and proof
+    clock mode never sees any of them. Mirrors check_fixed_format's
+    existing shape for its own sibling option.
+    """
+    from validation import ValidationError, validate_timer_options
+
+    print("Timer: millis-reveal validation")
+
+    base = {"minutes": 5, "seconds": 0}
+    clean = validate_timer_options(dict(base))
+    check("millis_full_size defaults to off",
+          clean["millis_full_size"] is False, "got {0!r}".format(clean))
+    check("millis_reveal defaults to off",
+          clean["millis_reveal"] is False, "got {0!r}".format(clean))
+    check("millis_reveal_seconds defaults to 60",
+          clean["millis_reveal_seconds"] == 60, "got {0!r}".format(clean))
+
+    def expect_error(label, payload, message):
+        try:
+            validate_timer_options(payload)
+            check(label, False, "no error raised")
+        except ValidationError as exc:
+            check(label, str(exc) == message, "got {0!r}".format(str(exc)))
+
+    expect_error("millis_full_size must be a boolean",
+                 dict(base, millis_full_size="yes"),
+                 '"Full-size milliseconds" must be true or false.')
+    expect_error("millis_reveal must be a boolean",
+                 dict(base, millis_reveal="yes"),
+                 '"Hold at zero until the end" must be true or false.')
+    expect_error("millis_reveal_seconds below 1 is rejected",
+                 dict(base, millis_reveal_seconds=0),
+                 "Milliseconds can start ticking with 1 to 1800 seconds "
+                 "left on the timer.")
+    expect_error("millis_reveal_seconds above 1800 is rejected",
+                 dict(base, millis_reveal_seconds=1801),
+                 "Milliseconds can start ticking with 1 to 1800 seconds "
+                 "left on the timer.")
+
+    clean = validate_timer_options(
+        dict(base, millis_full_size=True, millis_reveal=True,
+             millis_reveal_seconds=4))
+    check("millis_full_size and millis_reveal both true is accepted",
+          clean["millis_full_size"] is True
+          and clean["millis_reveal"] is True
+          and clean["millis_reveal_seconds"] == 4,
+          "got {0!r}".format(clean))
+
+    # Clock mode is countdown-only territory for all 3 keys -- same
+    # pattern as check_fixed_format's own clock-ignores check.
+    clock = {"mode": "clock", "start": "19:59:50", "duration_seconds": 30}
+    clean = validate_timer_options(
+        dict(clock, millis_full_size=True, millis_reveal=True,
+             millis_reveal_seconds=4))
+    check("clock mode ignores all 3 millis-reveal keys",
+          "millis_full_size" not in clean
+          and "millis_reveal" not in clean
+          and "millis_reveal_seconds" not in clean,
+          "got {0!r}".format(clean))
+
+
+def check_millis_reveal_render():
+    """docs/specs/millis-reveal.md -- the seamlessness proof, pixel-
+    checked rather than assumed. A 10s classic countdown with
+    millis_reveal crosses its 4s threshold between output frames 179
+    (rem_ms=4033, frozen '.000') and 180 (rem_ms=4000, live) at 30fps.
+    The owner's twice-stated requirement is that the main digits must
+    not jump in size or position at that boundary -- checked here as
+    one whole-composite bounding box (main + millis together), since
+    under this design layout never depends on time or on millis_reveal
+    at all. A second check on frame 179 alone confirms the frozen
+    millis glyphs are actually drawn (reading .000), not blank.
+    """
+    from PIL import Image, ImageChops
+
+    print("Timer: millis-reveal seamlessness (real render)")
+
+    filename = render_timer(
+        {"minutes": 0, "seconds": 10, "style": "classic",
+         "accent": "#e8b44f", "warn_last10": False, "hold_seconds": 1,
+         "show_millis": True, "millis_reveal": True,
+         "millis_reveal_seconds": 4},
+        lambda pct: None)
+    path = os.path.join(EXPORTS_DIR, filename)
+    frame_dir = tempfile.mkdtemp(prefix="sv-smoke-millis-seam-")
+    try:
+        verify("timer/classic-millis-reveal-seam", filename, 11.0)
+
+        def extract(idx):
+            frame_path = os.path.join(frame_dir, "f{0}.png".format(idx))
+            proc = subprocess.run(
+                [FFMPEG, "-y", "-i", path,
+                 "-vf", "select='eq(n\\, {0})'".format(idx),
+                 "-vsync", "0", "-frames:v", "1", frame_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            ok = os.path.isfile(frame_path)
+            check("frame {0} extracts cleanly".format(idx), ok,
+                  proc.stderr.decode("utf-8", "replace")[-300:])
+            return frame_path if ok else None
+
+        def lit_mask(frame_path):
+            # sum(rgb) > 150 sits comfortably between the vignette
+            # background (~25-49) and the digit colour (~717 white, or
+            # ~491 for the accent) -- docs/specs/millis-reveal.md.
+            # ImageChops.add clips each step at 255, but that can never
+            # flip THIS comparison: clipping only happens once the true
+            # sum already exceeds 255, which is already past 150.
+            r, g, b = Image.open(frame_path).convert("RGB").split()
+            total = ImageChops.add(ImageChops.add(r, g), b)
+            return total.point(lambda v: 255 if v > 150 else 0)
+
+        f179 = extract(179)
+        f180 = extract(180)
+        if f179 and f180:
+            mask179 = lit_mask(f179)
+            mask180 = lit_mask(f180)
+            bbox179 = mask179.getbbox()
+            bbox180 = mask180.getbbox()
+            check("frame 179 (frozen) has a lit bounding box",
+                  bbox179 is not None, "got {0!r}".format(bbox179))
+            check("frame 180 (live) has a lit bounding box",
+                  bbox180 is not None, "got {0!r}".format(bbox180))
+            check("the lit bounding box is the IDENTICAL rectangle on "
+                  "frame 179 (frozen) and frame 180 (live) -- the main "
+                  "digits do not move or resize across the freeze/tick "
+                  "boundary",
+                  bbox179 == bbox180,
+                  "frame179={0!r} frame180={1!r}".format(
+                      bbox179, bbox180))
+            print("    (observed bounding box: {0!r})".format(bbox179))
+
+            if bbox179 is not None:
+                # The millis run sits in the rightmost ~20% of the
+                # composite box. On the frozen frame it must still
+                # contain lit pixels -- proving the ".000" glyphs are
+                # actually drawn, not blank -- without OCR (this
+                # file's own convention).
+                x0, y0, x1, y1 = bbox179
+                ms_x0 = x1 - int(round((x1 - x0) * 0.20))
+                ms_region = mask179.crop((ms_x0, y0, x1, y1))
+                check("frame 179: the millis region (rightmost 20% "
+                      "of the box) has at least one lit pixel -- the "
+                      "frozen '.000' glyphs are drawn, not blank",
+                      ms_region.getbbox() is not None,
+                      "region {0!r} was completely blank".format(
+                          (ms_x0, y0, x1, y1)))
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        if os.path.isfile(path):
+            os.unlink(path)
+
+
+def check_millis_reveal_alpha_fringe():
+    """docs/specs/millis-reveal.md interaction bug the renderer agent
+    found and fixed: frozen_base_for's own _paste_digits call must also
+    pass alpha=is_alpha, exactly like base_for's and the live millis
+    branch's calls already do -- check_alpha_export covers those two,
+    but its own render never turns millis_reveal on, so it never
+    exercises frozen_base_for at all. Without the fix, a transparent
+    render with millis_reveal gets the self-mask-paste compositing
+    fringe alpha-export.md exists to remove, for the whole frozen
+    stretch. A 6s classic countdown, transparent="qtrle", show_millis +
+    millis_reveal on with a 2s threshold, so frame 30 (t=1.0s,
+    rem_ms=5000) sits solidly inside the frozen stretch, nowhere near
+    the freeze/tick boundary -- decoded with alpha kept (-pix_fmt
+    rgba), same as check_alpha_export's own real-render checks.
+    Checked the same way: background/interior alpha AND a fractional
+    edge value, not just the two extremes -- a binary (0-and-255-only)
+    check would still pass on this exact regression, since neither a
+    background pixel nor a fully opaque glyph-interior pixel is
+    sensitive to which paste path ran.
+    """
+    from PIL import Image
+
+    print("Timer: millis-reveal transparent frozen-stretch alpha "
+          "(frozen_base_for regression guard)")
+
+    filename = render_timer(
+        {"minutes": 0, "seconds": 6, "style": "classic",
+         "accent": "#e8b44f", "warn_last10": False, "hold_seconds": 1,
+         "show_millis": True, "millis_reveal": True,
+         "millis_reveal_seconds": 2, "transparent": "qtrle"},
+        lambda pct: None)
+    path = os.path.join(EXPORTS_DIR, filename)
+    frame_dir = tempfile.mkdtemp(prefix="sv-smoke-millis-alpha-")
+    try:
+        check("filename ends .mov",
+              filename.endswith(".mov"), "got {0!r}".format(filename))
+        verify("timer/classic-millis-reveal-alpha", filename, 7.0,
+               expected_codec="qtrle", expected_pixfmt="argb")
+
+        # Frame 30 (t=1.0s -> rem_ms=5000) is frozen while rem_ms >
+        # 2000 (i.e. frame index < 120 at 30fps) -- squarely a
+        # frozen_base_for frame, nowhere near the boundary.
+        frame_path = os.path.join(frame_dir, "frame30.png")
+        proc = subprocess.run(
+            [FFMPEG, "-y", "-i", path,
+             "-vf", "select='eq(n\\, 30)'", "-vsync", "0",
+             "-frames:v", "1", "-pix_fmt", "rgba", frame_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        got_frame = os.path.isfile(frame_path)
+        check("frozen-stretch frame extracts cleanly with alpha kept "
+              "(-pix_fmt rgba)", got_frame,
+              proc.stderr.decode("utf-8", "replace")[-300:])
+        if got_frame:
+            frame = Image.open(frame_path).convert("RGBA")
+            bg_alpha = frame.getpixel((10, 10))[3]
+            check("frozen stretch: background-area pixel (10, 10) is "
+                  "fully transparent (alpha == 0)",
+                  bg_alpha == 0, "got alpha={0!r}".format(bg_alpha))
+            frame_alpha = frame.split()[-1]
+            lo, hi = frame_alpha.getextrema()
+            has_mid = any(
+                c > 0 for c in frame_alpha.histogram()[1:255])
+            check("frozen stretch: a glyph-interior pixel is fully "
+                  "opaque (alpha >= 250)", hi >= 250,
+                  "max alpha = {0!r}".format(hi))
+            check("frozen stretch: at least one glyph-edge pixel has "
+                  "FRACTIONAL alpha (0 < alpha < 255), proving "
+                  "frozen_base_for composited with alpha=is_alpha "
+                  "instead of the plain self-mask paste",
+                  has_mid, "no intermediate alpha value found "
+                           "(lo={0!r} hi={1!r})".format(lo, hi))
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        if os.path.isfile(path):
+            os.unlink(path)
+
+
 def check_https_goes_through_netutil():
     """Every outbound HTTPS call must use netutil.urlopen. A frozen build has
     no CA bundle on disk, so a plain urllib.request.urlopen verifies against
@@ -2453,6 +2747,14 @@ def main():
     print()
 
     check_fixed_format()
+    print()
+    check_millis_size_and_ticking()
+    print()
+    check_millis_reveal_validation()
+    print()
+    check_millis_reveal_render()
+    print()
+    check_millis_reveal_alpha_fringe()
     print()
     check_boot_marker_is_packaged_only()
     print()

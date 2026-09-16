@@ -199,6 +199,33 @@ def _build_jobs():
             {"minutes": 0, "seconds": 6, "style": "classic",
              "accent": "#e8b44f", "warn_last10": True,
              "hold_seconds": 2, "show_millis": True})),
+        # docs/specs/millis-reveal.md: full-size millis (option a) --
+        # main digits shrink to make room, millis drawn at 100% instead
+        # of CLOCK_MS_SCALE (55%). No reveal, so every frame ticks live.
+        ("timer/classic-millis-full-size", lambda: _timer(
+            {"minutes": 0, "seconds": 6, "style": "classic",
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2, "show_millis": True,
+             "millis_full_size": True})),
+        # docs/specs/millis-reveal.md: hold-at-zero (option b) -- millis
+        # read frozen ".000" until the last 4s, then tick live; this is
+        # the job that pins frozen_base_for's cached path.
+        ("timer/classic-millis-reveal", lambda: _timer(
+            {"minutes": 0, "seconds": 6, "style": "classic",
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2, "show_millis": True,
+             "millis_reveal": True, "millis_reveal_seconds": 4})),
+        # docs/specs/millis-reveal.md: the single tightest combination
+        # found by measurement -- ring + fixed_format + full-size millis
+        # sits at a -0.8px auto-fit margin (still 35+px inside the
+        # ring's true inner edge). A future change that regresses that
+        # sub-pixel margin should show up here as a hash mismatch.
+        ("timer/ring-millis-reveal-fixed", lambda: _timer(
+            {"minutes": 0, "seconds": 6, "style": "ring",
+             "accent": "#e8b44f", "warn_last10": True,
+             "hold_seconds": 2, "show_millis": True,
+             "millis_full_size": True, "millis_reveal": True,
+             "millis_reveal_seconds": 4, "fixed_format": True})),
         ("timer/bar-two-backgrounds", lambda: _timer(
             {"minutes": 0, "seconds": 6, "style": "bar",
              "accent": "#e8b44f", "warn_last10": True,

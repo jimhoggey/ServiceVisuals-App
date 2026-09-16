@@ -61,10 +61,17 @@ events lives in [`stats.py`](stats.py).
      MODE to **Clock** for a live wall clock that ticks forward from a start
      time you choose, in Classic or Ring style, 12- or 24-hour format, with
      optional seconds and milliseconds. **Show milliseconds** works in
-     Countdown mode too, for a `5:00.000`-style timer. Drop in one or a few
-     background images (kept for reuse next time) with adjustable dim and
-     blur — with 2+ images the background cycles on a timer you set, a clean
-     cut with no crossfade. Or flip **GREEN SCREEN** for a flat chroma-green
+     Countdown mode too, for a `5:00.000`-style timer, with two more
+     Countdown-only options: **Full-size milliseconds** draws the `.000`
+     at the same size as the main digits (the whole timer is drawn a
+     little smaller to still fit), and **Hold at zero until the end**
+     keeps the milliseconds on screen for the whole render reading `.000`
+     until the last N seconds (default 60), then ticks live — seamless,
+     since the layout is computed once and never changes. Drop in one or
+     a few background images (kept for reuse next time) with adjustable
+     dim and blur — with 2+ images the background cycles on a timer you
+     set, a clean cut with no crossfade. Or flip **GREEN SCREEN** for a
+     flat chroma-green
      frame you key out in your video software, keeping the digits/ring/bar
      to key back in over your own footage — or **TRANSPARENT** for a real
      alpha-channel export instead of keying: a smaller `.mov` for CapCut

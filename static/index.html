@@ -427,6 +427,29 @@
                 <label for="timer-show-millis">Show milliseconds</label>
               </div>
               <p class="hint">Renders at 30 fps &#8212; longer to export</p>
+              <!-- Full-size / Hold-at-zero (spec: docs/specs/millis-reveal.md):
+                   both independent of each other and of style -- neither
+                   disables the other, nothing left to cross-check (see the
+                   spec's Collision check). Countdown-only like Fixed format
+                   just below, but this group isn't hidden per mode (Addendum
+                   note above), so both stay visible/checkable in clock mode
+                   too; timerPayload() is what actually keeps them out of the
+                   clock branch. -->
+              <div class="check-row">
+                <input type="checkbox" id="timer-millis-full-size">
+                <label for="timer-millis-full-size">Full-size milliseconds</label>
+              </div>
+              <p class="hint">The .000 is the same size as the minutes and seconds. The whole timer is drawn a little smaller so it still fits.</p>
+              <div class="check-row">
+                <input type="checkbox" id="timer-millis-reveal">
+                <label for="timer-millis-reveal">Hold at zero until the end</label>
+              </div>
+              <p class="hint">Shows .000 without ticking until the last few seconds, then counts down normally.</p>
+              <div class="num-field num-field-wide" id="timer-millis-reveal-seconds-field" hidden>
+                <label for="timer-millis-reveal-seconds">START TICKING WITH THIS MANY SECONDS LEFT</label>
+                <input type="number" id="timer-millis-reveal-seconds" inputmode="numeric" min="1" max="1800" step="1" value="60">
+              </div>
+              <p class="hint" id="timer-millis-reveal-seconds-hint" hidden>1 to 1800 seconds</p>
               <div class="check-row" id="timer-fixed-row">
                 <input type="checkbox" id="timer-fixed-format">
                 <label for="timer-fixed-format">Fixed 00:00:00 format</label>

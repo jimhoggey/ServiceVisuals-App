@@ -140,6 +140,21 @@ def _validate_countdown_options(options):
         raise ValidationError(
             '"Fixed 00:00:00 format" must be true or false.')
 
+    # Two independent countdown-only options (docs/specs/millis-reveal.md).
+    # Accepted and validated regardless of show_millis, exactly like
+    # fixed_format above — they're simply inert when millis are off. No
+    # cross-field checks between them, or against style/total: the spec's
+    # own measurements found nothing to refuse.
+    millis_full_size = options.get("millis_full_size", False)
+    if not isinstance(millis_full_size, bool):
+        raise ValidationError(
+            '"Full-size milliseconds" must be true or false.')
+    millis_reveal = options.get("millis_reveal", False)
+    if not isinstance(millis_reveal, bool):
+        raise ValidationError(
+            '"Hold at zero until the end" must be true or false.')
+    millis_reveal_seconds = _millis_reveal_seconds_field(options)
+
     if show_millis and total > MILLIS_MAX_SECONDS:
         raise ValidationError(
             "With milliseconds on, the timer can run for at most 30 minutes. "
@@ -154,9 +169,40 @@ def _validate_countdown_options(options):
         "hold_seconds": hold_seconds,
         "show_millis": show_millis,
         "fixed_format": fixed_format,
+        "millis_full_size": millis_full_size,
+        "millis_reveal": millis_reveal,
+        "millis_reveal_seconds": millis_reveal_seconds,
     }
     clean.update(_timer_background_options(options))
     return clean
+
+
+def _millis_reveal_seconds_field(options):
+    """millis_reveal_seconds for a countdown (docs/specs/millis-reveal.md):
+    1 to MILLIS_MAX_SECONDS, default 60. Same shape as _clip_length_field
+    below — the generic _int_field template's "must be a whole number
+    between X and Y" phrasing doesn't fit a "seconds left" field
+    naturally, so this mirrors _clip_length_field's type-safety checks
+    with that literal message instead of bending the shared helper for
+    one more caller. The ceiling matches MILLIS_MAX_SECONDS rather than
+    repeating 1800 as an unrelated-looking literal: a countdown with
+    millis on can never run longer than that anyway.
+    """
+    value = options.get("millis_reveal_seconds", 60)
+    msg = ("Milliseconds can start ticking with 1 to 1800 seconds left "
+           "on the timer.")
+    if isinstance(value, bool):
+        raise ValidationError(msg + " (Got true/false.)")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValidationError(msg + " (Fractions are not allowed.)")
+        value = int(value)
+    if not isinstance(value, int):
+        raise ValidationError(
+            msg + " (Got {0!r} — send a number, not text.)".format(value))
+    if value < 1 or value > MILLIS_MAX_SECONDS:
+        raise ValidationError(msg)
+    return value
 
 
 def _clip_length_field(options):

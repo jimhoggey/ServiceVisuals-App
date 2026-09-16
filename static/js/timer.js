@@ -498,6 +498,12 @@
       // Addendum (v1.23.0): one checkbox, one id, used by both modes.
       showMillis: $("timer-show-millis").checked,
       fixedFormat: $("timer-fixed-format").checked,
+      // Full-size / Hold-at-zero millis (spec: docs/specs/millis-reveal.md):
+      // countdown-only, read unconditionally like fixedFormat above --
+      // timerPayload() is what keeps them out of the clock branch.
+      millisFullSize: $("timer-millis-full-size").checked,
+      millisReveal: $("timer-millis-reveal").checked,
+      millisRevealSeconds: toInt($("timer-millis-reveal-seconds").value, 60),
       greenScreen: green,
       transparent: transparentOn ?
           (transparentFormatEl ? transparentFormatEl.value : "qtrle") : false,
@@ -524,7 +530,8 @@
     var total = m * 60 + s;
     if (total < 5) return "The timer must run for at least 5 seconds.";
     if (total > 7200) return "The timer can run for at most 120 minutes in total.";
-    // Mirrors MILLIS_MAX_SECONDS in app.py: 30 fps with nothing cacheable.
+    // Mirrors MILLIS_MAX_SECONDS in validation.py: 30 fps with nothing
+    // cacheable.
     if ($("timer-show-millis").checked && total > 1800) {
       return "With milliseconds on, the timer can run for at most 30 minutes. Turn milliseconds off for a longer timer.";
     }
@@ -534,6 +541,19 @@
   function validateTimerHold() {
     var hold = intFrom($("timer-hold"));
     if (hold === null || hold < 0 || hold > 30) return '"Keep 0:00 on screen" must be 0 to 30 seconds.';
+    return null;
+  }
+
+  // Range check only (spec: docs/specs/millis-reveal.md API contract) --
+  // seconds >= total is NOT checked here: it's a described, not rejected,
+  // degenerate case (see updateTimer()'s hint text below), so it must
+  // never block export the way an out-of-range value does.
+  function validateTimerMillisRevealSeconds() {
+    var s = intFrom($("timer-millis-reveal-seconds"));
+    if (s === null || s < 1 || s > 1800) {
+      return "Milliseconds can start ticking with 1 to 1800 seconds " +
+          "left on the timer.";
+    }
     return null;
   }
 
@@ -565,7 +585,8 @@
     var bgErr = validateTimerBg();
     if (bgErr) return bgErr;
     if (t.mode === "clock") return validateTimerClockStart() || validateTimerClockLength();
-    return validateTimerDuration() || validateTimerHold();
+    return validateTimerDuration() || validateTimerHold() ||
+        validateTimerMillisRevealSeconds();
   }
 
   // Same display rule as the renderer: unpadded minutes, H:MM:SS above 1 hour.
@@ -688,11 +709,17 @@
     return Math.max(ctx.measureText("AM").width, ctx.measureText("PM").width);
   }
 
-  function clockCompositeWidth(ctx, base, millis, tag, px) {
+  // msScale (spec: docs/specs/millis-reveal.md "Preview"): the millis run's
+  // size as a fraction of the main digits' px, default 0.55 (today's fixed
+  // ratio) so every caller that doesn't pass it -- clock mode, and any
+  // countdown call site that predates this option -- is pixel-unchanged.
+  // Full-size millis passes 1.0.
+  function clockCompositeWidth(ctx, base, millis, tag, px, msScale) {
     var met = digitMetrics(ctx, px);
     var w = clockWidth(base, met);
     if (millis) {
-      var mpx = Math.max(1, Math.round(px * 0.55));
+      var scale = (msScale === undefined) ? 0.55 : msScale;
+      var mpx = Math.max(1, Math.round(px * scale));
       w += clockWidth(millis, digitMetrics(ctx, mpx));
     }
     if (tag) {
@@ -707,8 +734,9 @@
   // gap after the last digit) as a single centred line. Can't reuse
   // drawClock() directly — that draws one string at one uniform size — but
   // reuses its digitMetrics()/clockWidth() geometry throughout.
-  function drawClockComposite(ctx, base, millis, tag, cx, cy, px, color, accent, hasBg) {
-    var totalW = clockCompositeWidth(ctx, base, millis, tag, px);
+  function drawClockComposite(
+      ctx, base, millis, tag, cx, cy, px, color, accent, hasBg, msScale) {
+    var totalW = clockCompositeWidth(ctx, base, millis, tag, px, msScale);
     var met = digitMetrics(ctx, px);
     var x = cx - totalW / 2;
 
@@ -734,7 +762,8 @@
     });
 
     if (millis) {
-      var mpx = Math.max(1, Math.round(px * 0.55));
+      var scale = (msScale === undefined) ? 0.55 : msScale;
+      var mpx = Math.max(1, Math.round(px * scale));
       var mmet = digitMetrics(ctx, mpx);
       ctx.font = "700 " + mpx + "px " + FONT_DIGITS;
       millis.split("").forEach(function (ch) {
@@ -814,6 +843,13 @@
     // are always ".000" here — never derived from wall time (drawClockTimerPreview
     // above follows the same "frame 0" rule for clock mode).
     var millis = t.showMillis ? ".000" : "";
+    // Full-size millis (spec: docs/specs/millis-reveal.md): 1.0 instead of
+    // today's fixed 0.55, threaded into every clockCompositeWidth/
+    // drawClockComposite call below so the preview's auto-fit shrinks the
+    // main digits exactly the way the renderer's _millis_size/
+    // _clock_font_size do. Countdown only -- drawClockTimerPreview() (clock
+    // mode) never receives this and keeps its own untouched 0.55 default.
+    var msScale = t.millisFullSize ? 1.0 : 0.55;
 
     if (t.style === "ring") {
       // render: centreline radius 400, thickness 26, digits 190px (all at 2x)
@@ -832,9 +868,11 @@
         // mirrors RING_INNER_FIT/RING_DIGITS_MAX in render/timer.py at
         // preview scale (702/2=351, 190/2=95). Without millis this is
         // untouched: same fixed 95px drawClock() call as always.
-        var rw = clockCompositeWidth(ctx, text, millis, "", 100);
+        var rw = clockCompositeWidth(ctx, text, millis, "", 100, msScale);
         var rpx = rw > 0 ? Math.max(30, Math.min(95, Math.round(100 * 351 / rw))) : 95;
-        drawClockComposite(ctx, text, millis, "", PW / 2, PH / 2, rpx, digitColor, t.accent, t.backgrounds.length > 0);
+        drawClockComposite(
+            ctx, text, millis, "", PW / 2, PH / 2, rpx, digitColor,
+            t.accent, t.backgrounds.length > 0, msScale);
       } else {
         drawClock(ctx, text, PW / 2, PH / 2, digitMetrics(ctx, 95), digitColor, t.backgrounds.length > 0);
       }
@@ -843,9 +881,11 @@
       if (millis) {
         // fit to the bar's width — mirrors BAR_WIDTH/330 at preview scale
         // (1640/2=820, 330/2=165). Without millis: unchanged fixed 165px.
-        var bw = clockCompositeWidth(ctx, text, millis, "", 100);
+        var bw = clockCompositeWidth(ctx, text, millis, "", 100, msScale);
         var bpx = bw > 0 ? Math.max(30, Math.min(165, Math.round(100 * 820 / bw))) : 165;
-        drawClockComposite(ctx, text, millis, "", PW / 2, 250, bpx, digitColor, t.accent, t.backgrounds.length > 0);
+        drawClockComposite(
+            ctx, text, millis, "", PW / 2, 250, bpx, digitColor,
+            t.accent, t.backgrounds.length > 0, msScale);
       } else {
         drawClock(ctx, text, PW / 2, 250, digitMetrics(ctx, 165), digitColor, t.backgrounds.length > 0);
       }
@@ -859,9 +899,11 @@
       // classic + millis: auto-size the FULL string (incl. ".000") to fit
       // 1600px at 2x (800 here), capped at 400 (200 here) — same fit rule
       // as _clock_font_size(show_millis=True, has_tag=False) in timer.py.
-      var w = clockCompositeWidth(ctx, text, millis, "", 100);
+      var w = clockCompositeWidth(ctx, text, millis, "", 100, msScale);
       var px = w > 0 ? Math.max(30, Math.min(200, Math.round(100 * 800 / w))) : 200;
-      drawClockComposite(ctx, text, millis, "", PW / 2, PH / 2, px, digitColor, t.accent, t.backgrounds.length > 0);
+      drawClockComposite(
+          ctx, text, millis, "", PW / 2, PH / 2, px, digitColor,
+          t.accent, t.backgrounds.length > 0, msScale);
     } else {
       // classic: auto-size to fit 1600px at 2x (800 here), capped at 200
       var ref = digitMetrics(ctx, 100);
@@ -937,6 +979,13 @@
     // runs unconditionally rather than inside either branch below.
     applyTimerBg();
     var t = readTimer();
+    // Hold-at-zero's seconds field (spec: docs/specs/millis-reveal.md):
+    // visible in BOTH modes, same reasoning as Fixed format in the same
+    // group -- only the countdown payload actually sends it. Its hint text
+    // is only recomputed below in the countdown branch; in clock mode it
+    // just keeps showing the neutral range description already in the HTML.
+    $("timer-millis-reveal-seconds-field").hidden = !t.millisReveal;
+    $("timer-millis-reveal-seconds-hint").hidden = !t.millisReveal;
     var bgErr = validateTimerBg();
     var bgHint = $("timer-bg-seconds-hint");
     bgHint.textContent = bgErr || "Each image holds this long, then the next one shows.";
@@ -956,7 +1005,8 @@
     } else {
       var durationErr = validateTimerDuration();
       var holdErr = validateTimerHold();
-      err = durationErr || holdErr || bgErr;
+      var revealSecondsErr = validateTimerMillisRevealSeconds();
+      err = durationErr || holdErr || revealSecondsErr || bgErr;
       var hint = $("timer-duration-hint");
       hint.textContent = durationErr || ($("timer-show-millis").checked ? "5 seconds to 30 minutes with milliseconds" : "5 seconds to 120 minutes");
       hint.classList.toggle("is-bad", !!durationErr);
@@ -965,6 +1015,24 @@
         "After the countdown ends the video stays on 0:00 this long. 0 to 30 seconds.";
       holdHint.classList.toggle("is-bad", !!holdErr);
       $("timer-hold").setAttribute("aria-invalid", holdErr ? "true" : "false");
+
+      // Degenerate case (spec: "Milliseconds tick for the whole timer... ") --
+      // NOT an error, must never join `err` above: a volunteer whose timer
+      // is shorter than the (default 60s) threshold must still export fine.
+      var revealSecondsHint = $("timer-millis-reveal-seconds-hint");
+      var total = Math.max(0, t.minutes * 60 + t.seconds);
+      if (revealSecondsErr) {
+        revealSecondsHint.textContent = revealSecondsErr;
+      } else if (t.millisRevealSeconds >= total) {
+        revealSecondsHint.textContent =
+            "Milliseconds tick for the whole timer (it's only " +
+            total + "s long).";
+      } else {
+        revealSecondsHint.textContent = "1 to 1800 seconds";
+      }
+      revealSecondsHint.classList.toggle("is-bad", !!revealSecondsErr);
+      $("timer-millis-reveal-seconds").setAttribute(
+          "aria-invalid", revealSecondsErr ? "true" : "false");
     }
 
     $("timer-export").disabled = exportBusy["timer"] || (!!err);
@@ -1018,6 +1086,12 @@
         // payloads too now — see _validate_countdown_options in app.py.
         show_millis: t.showMillis,
         fixed_format: t.fixedFormat,
+        // Full-size / Hold-at-zero millis (spec: docs/specs/millis-reveal.md):
+        // countdown-only, like fixed_format just above -- never sent in the
+        // clock branch above.
+        millis_full_size: t.millisFullSize,
+        millis_reveal: t.millisReveal,
+        millis_reveal_seconds: t.millisRevealSeconds,
         // Backgrounds (spec: docs/specs/timer-backgrounds.md).
         backgrounds: t.backgrounds,
         bg_seconds: t.bgSeconds,

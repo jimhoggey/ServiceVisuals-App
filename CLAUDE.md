@@ -9,8 +9,12 @@ Owner: Fynn (GitHub `jimhoggey`). Repo: **jimhoggey/ServiceVisuals-App** (public
 
 ## Working agreements
 
-- **Consult the graphify knowledge graph before changing code.** From the repo
-  root: `graphify query "<question>" --budget 700`. It shows what a change
+- **Consult the graphify knowledge graph before changing code, and before
+  writing a spec.** From the repo root: `export PATH="$HOME/.local/bin:$PATH"
+  && graphify query "<question>" --budget 700`. The PATH prefix is not
+  optional — uv installs graphify to `~/.local/bin`, which subagent shells
+  do not have, and agents without it hit "command not found" and quietly
+  skipped the graph. It shows what a change
   touches across files. **Then update it as the last step of the change**, so
   the next agent queries a graph that still matches the code: `graphify update
   .` on a subagent. Use that subcommand rather than a bare `graphify .` — it

@@ -621,7 +621,7 @@ RING_DIGITS_MAX = 190            # the countdown ring's digit size
 
 
 def _clock_font_size(main_text, show_millis, has_tag, fit_width=1600.0,
-                     cap=400):
+                     cap=400, ms_scale=CLOCK_MS_SCALE):
     """Auto-size clock digits: fit `fit_width` px wide, capped at `cap`.
 
     Same ref-then-scale approach as _classic_font_size, generalised to the
@@ -635,12 +635,18 @@ def _clock_font_size(main_text, show_millis, has_tag, fit_width=1600.0,
     "19:59:50.000" — twelve slots — and at 190px that ran straight through
     the track on both sides. So the ring fits to its inner diameter, still
     capped at 190 so the short strings look exactly like the countdown.
+
+    `ms_scale` (docs/specs/millis-reveal.md) defaults to today's constant,
+    so every caller that doesn't pass it fits exactly as before this
+    parameter existed. The countdown's millis_full_size option is the only
+    caller that ever passes something else (1.0), so the joint fit widens
+    to hold the millis run at full width instead of 55%.
     """
     ref = 200
     met_main = _digits_metrics(ref)
     w = _text_width(main_text, met_main)
     if show_millis:
-        met_ms = _digits_metrics(max(1, int(round(ref * CLOCK_MS_SCALE))))
+        met_ms = _digits_metrics(max(1, int(round(ref * ms_scale))))
         w += _text_width(".000", met_ms)
     if has_tag:
         tag_size = max(1, int(round(ref * CLOCK_TAG_SCALE)))
@@ -853,6 +859,41 @@ def _render_clock(options, progress_cb):
     return os.path.basename(out_path)
 
 
+# ---- countdown millis: full-size + freeze-until-the-end -----------------
+#
+# docs/specs/millis-reveal.md. Both functions are countdown-only, pure, and
+# additive: _render_clock above is left completely unmodified and keeps its
+# own inline CLOCK_MS_SCALE math, so clock mode's byte-identical output can
+# never be put at risk by a change made for this feature.
+
+def _millis_size(main_size, full_size):
+    """The millis run's font size in px, given the countdown's already-
+    fitted main digit size: exactly `main_size` when millis_full_size is
+    on, else today's CLOCK_MS_SCALE ratio (rounded, floored at 1px so a
+    tiny main size can never round to 0 and crash font loading). The one
+    function that decides millis size for the countdown's real per-frame
+    metrics — nothing computes size * CLOCK_MS_SCALE inline for that any
+    more.
+    """
+    if full_size:
+        return main_size
+    return max(1, int(round(main_size * CLOCK_MS_SCALE)))
+
+
+def _millis_ticking(rem_ms, millis_reveal, millis_reveal_seconds):
+    """True once the millis run should show the live value instead of the
+    frozen ".000" placeholder. Inclusive at the boundary, matching the
+    existing warn-colour check's own `rem_ms <= 10_000` convention rather
+    than inventing a new comparison style. `millis_reveal=False` always
+    ticks — byte-identical to today's plain show_millis behaviour for
+    every frame of the render. A hold-phase rem_ms of 0, and a
+    millis_reveal_seconds >= the total, both fall out of this formula
+    already True with no special-casing (see docs/specs/millis-reveal.md,
+    "The freeze/tick boundary").
+    """
+    return (not millis_reveal) or (rem_ms <= millis_reveal_seconds * 1000)
+
+
 # ---- main entry point -----------------------------------------------------------
 
 def render_timer(options, progress_cb):
@@ -929,6 +970,15 @@ def render_timer(options, progress_cb):
     # Always HH:MM:SS instead of the shortest shape that fits the total.
     fixed = bool(options.get("fixed_format"))
 
+    # Two independent countdown-only options (docs/specs/millis-reveal.md).
+    # Clock mode returns via _render_clock above before this line is ever
+    # reached, so it never sees these three keys — that dispatch is the
+    # whole reason "clock mode ignores them" needs no extra guard here.
+    millis_full_size = bool(options.get("millis_full_size", False))
+    millis_reveal = bool(options.get("millis_reveal", False))
+    millis_reveal_seconds = max(1, min(1800, _to_int(
+        options.get("millis_reveal_seconds"), 60)))
+
     initial_text = _format_remaining(total, total, fixed)
     if style == "ring":
         size, digits_cy = 190, RING_CY
@@ -944,16 +994,24 @@ def render_timer(options, progress_cb):
         # width/cap; classic's defaults (1600/400) match _classic_font_size's
         # numbers exactly, just fitted to the wider millis string instead.
         # Without millis this block never runs — `size` above is untouched.
+        # millis_full_size (docs/specs/millis-reveal.md) is the ONLY thing
+        # that changes here: widening the fit's own millis-width term to
+        # 100% is exactly why the whole timer comes out smaller when it's
+        # on. millis_reveal never touches sizing at all, so it has no
+        # presence in this block.
+        ms_scale = 1.0 if millis_full_size else CLOCK_MS_SCALE
         if style == "ring":
             size = _clock_font_size(initial_text, True, False,
-                                    RING_INNER_FIT, RING_DIGITS_MAX)
+                                    RING_INNER_FIT, RING_DIGITS_MAX,
+                                    ms_scale=ms_scale)
         elif style == "bar":
             size = _clock_font_size(initial_text, True, False,
-                                    BAR_WIDTH, 330)
+                                    BAR_WIDTH, 330, ms_scale=ms_scale)
         else:
-            size = _clock_font_size(initial_text, True, False)
+            size = _clock_font_size(initial_text, True, False,
+                                    ms_scale=ms_scale)
     met = _digits_metrics(size)
-    met_ms = _digits_metrics(max(1, int(round(size * CLOCK_MS_SCALE)))) \
+    met_ms = _digits_metrics(_millis_size(size, millis_full_size)) \
         if show_millis else None
 
     out_path = export_path(
@@ -995,31 +1053,81 @@ def render_timer(options, progress_cb):
                 bases.popitem(last=False)
         return base
 
+    # A sibling to base_for above, not a merge into it, kept fully separate
+    # so the plain non-millis path's byte-identical guarantee is never at
+    # risk from a change made for this feature (docs/specs/millis-reveal.md
+    # "Do not"). Covers the frozen stretch of a millis_reveal render, where
+    # the millis run reads a fixed ".000" and only the main digits change,
+    # once a second: without this cache that stretch would rebuild a fresh
+    # block on every one of its 30fps frames for no visual benefit (a long
+    # freeze would render slower than plain show_millis does today).
+    frozen_bases = OrderedDict()
+    frozen_bases_lock = threading.Lock()
+
+    def frozen_base_for(rem, idx):
+        # Whole-second colour — base_for's own formula above, NOT the
+        # ticking branch's millisecond-precision `rem_ms <= 10_000` check,
+        # so every frame of one frozen second shares one cache key. The
+        # millis digits carry no real sub-second information during the
+        # freeze, so there is no reason for their colour to change at
+        # sub-second precision either.
+        color = accent if (warn_last10 and rem <= 10) else DIGITS_COLOR
+        text = _format_remaining(rem, total, fixed)
+        key = (text, color, idx)
+        with frozen_bases_lock:
+            cached = frozen_bases.get(key)
+            if cached is not None:
+                frozen_bases.move_to_end(key)
+                return cached
+        block = _render_clock_block(text, ".000", "", color, color,
+                                    met, met_ms, None, 0)
+        base = plates[idx].copy()
+        _paste_digits(base, block,
+                      WIDTH // 2 - block.width // 2,
+                      digits_cy - block.height // 2, has_bg,
+                      alpha=is_alpha)
+        with frozen_bases_lock:
+            frozen_bases[key] = base
+            while len(frozen_bases) > bases_cap:
+                frozen_bases.popitem(last=False)
+        return base
+
     def make_frame(i):
         t = i / float(fps)
         idx = plate_index(i, fps, bg_seconds, n_plates)
         if show_millis:
             # Every frame's ms is unique (30fps, no per-second repeats), so
-            # there is no base cache here — matches clock mode's millis path
-            # (module docstring / _render_clock's make_frame above). Frame
-            # index arithmetic mirrors format_clock_time's contract exactly:
-            # ms = round(i*1000/fps), just counting DOWN instead of forward.
+            # there is no base cache here for the ticking branch — matches
+            # clock mode's millis path (module docstring / _render_clock's
+            # make_frame above). Frame index arithmetic mirrors
+            # format_clock_time's contract exactly: ms = round(i*1000/fps),
+            # just counting DOWN instead of forward.
             rem_ms = max(0, total * 1000 - int(round(i * 1000.0 / fps)))
-            color = (accent if (warn_last10 and rem_ms <= 10_000)
-                    else DIGITS_COLOR)
-            main_text = _format_remaining(rem_ms // 1000, total, fixed)
-            # Leading "." makes this the same "small run" shape clock mode
-            # passes (main_text[-4:] there always keeps the dot too) — the
-            # "." gets its own narrow slot via _digits_metrics/_slot_width,
-            # same as everywhere else a dot is drawn.
-            ms_text = ".{0:03d}".format(rem_ms % 1000)
-            block = _render_clock_block(main_text, ms_text, "", color, color,
-                                        met, met_ms, None, 0)
-            base = plates[idx].copy()
-            _paste_digits(base, block,
-                          WIDTH // 2 - block.width // 2,
-                          digits_cy - block.height // 2, has_bg,
-                          alpha=is_alpha)
+            if not _millis_ticking(rem_ms, millis_reveal,
+                                   millis_reveal_seconds):
+                # Frozen stretch (docs/specs/millis-reveal.md): layout is
+                # identical to the ticking branch below by construction —
+                # same met/met_ms, same centring — only the cache and the
+                # fixed ".000" text differ, which is exactly why nothing
+                # moves at the threshold.
+                base = frozen_base_for(rem_ms // 1000, idx)
+            else:
+                color = (accent if (warn_last10 and rem_ms <= 10_000)
+                        else DIGITS_COLOR)
+                main_text = _format_remaining(rem_ms // 1000, total, fixed)
+                # Leading "." makes this the same "small run" shape clock
+                # mode passes (main_text[-4:] there always keeps the dot
+                # too) — the "." gets its own narrow slot via
+                # _digits_metrics/_slot_width, same as everywhere else a
+                # dot is drawn.
+                ms_text = ".{0:03d}".format(rem_ms % 1000)
+                block = _render_clock_block(main_text, ms_text, "", color,
+                                            color, met, met_ms, None, 0)
+                base = plates[idx].copy()
+                _paste_digits(base, block,
+                              WIDTH // 2 - block.width // 2,
+                              digits_cy - block.height // 2, has_bg,
+                              alpha=is_alpha)
         else:
             elapsed = int(t)
             rem = total - elapsed if elapsed < total else 0
