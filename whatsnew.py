@@ -29,6 +29,14 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.35.0": [
+        "Timer: full-size milliseconds — the .000 matches the minutes "
+        "and seconds.",
+        "Timer: hold milliseconds at .000 until the last minute, then let "
+        "them tick.",
+        "Timer: smoother milliseconds at 60 fps, for a dramatic final "
+        "countdown.",
+    ],
     "1.34.0": [
         "Timer: a new TRANSPARENT background — clean-edged numbers, no "
         "green screen to key out.",
