@@ -29,6 +29,14 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.33.0": [
+        "YouTube download: separate links with a comma or a new line — "
+        "both work the same.",
+        "Download: a finished batch says how many saved, not just the "
+        "last filename.",
+        "Fixed: DOWNLOAD ANOTHER re-ran the whole list. It now clears "
+        "the box for the next one.",
+    ],
     "1.32.0": [
         "YouTube download: tick BATCH and paste a list of links — three "
         "download at a time.",
