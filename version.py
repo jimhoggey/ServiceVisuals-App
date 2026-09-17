@@ -1,3 +1,3 @@
 """Single source of the app version (read by app.py, desktop.py, CI)."""
 
-APP_VERSION = "1.36.0"
+APP_VERSION = "1.37.0"

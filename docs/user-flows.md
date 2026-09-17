@@ -155,29 +155,29 @@ toggle meaning "images are the background". Adding an image is a separate
 - v1.36.0 — + ADD IMAGE was hidden while GREEN SCREEN or TRANSPARENT was on,
   so only two choices appeared. Now always visible.
 - v1.36.0 — + ADD IMAGE gained a gold selected state.
-- *Unreleased (next: v1.37.0)* — + ADD IMAGE gave no feedback when clicked
+- v1.37.0 — + ADD IMAGE gave no feedback when clicked
   with no images. Now gold the instant it is clicked. (Rule 2.)
-- *Unreleased* — the three choices wrapped at every width from 940px up, and
+- v1.37.0 — the three choices wrapped at every width from 940px up, and
   widening the window never helped. They now have a row of their own;
   confirmed one row at 1440, 1024, 945, 900 and 768px, from 0 to 10 images.
   (Rule 6.)
-- *Unreleased* — which button got orphaned changed with the image count.
+- v1.37.0 — which button got orphaned changed with the image count.
   The row is now stable at every count. (Rule 6.)
-- *Unreleased* — "No images — plain dark background." sat in the button row
+- v1.37.0 — "No images — plain dark background." sat in the button row
   and was pushed around by the wrap. It is now a caption above the row.
-- *Unreleased* — "TRANSPAREN / T" broke mid-word at 945px. Measurement said
+- v1.37.0 — "TRANSPAREN / T" broke mid-word at 945px. Measurement said
   18px to spare; only a screenshot showed it. The word is now kept whole;
   checked at every width and image count.
-- *Unreleased* — the switch read "+ ADD IMAGE", so it was the most likely
+- v1.37.0 — the switch read "+ ADD IMAGE", so it was the most likely
   click for a second image and switched images off instead. Renamed to
   IMAGES; + ADD IMAGE moved to the thumbnail row with visible words.
   Confirmed by review: with images on, + ADD IMAGE is found right after the
   thumbnails and adds another without touching IMAGES, at 1440, 1024, 945,
   900 and 768px, with 2 images and at the 10-image cap. (Rule 9.)
-- *Unreleased* — at two-column widths the switch's label sat about 7px
+- v1.37.0 — at two-column widths the switch's label sat about 7px
   higher than its neighbours'. All three now share dot-over-label;
   confirmed level to the pixel at all five widths, with 0, 2 and 10 images.
-- *Unreleased* — switching stored images back on reopened the picker every
+- v1.37.0 — switching stored images back on reopened the picker every
   time. It now opens only when there is nothing to show; confirmed with 2
   stored images and at 10 of 10.
 

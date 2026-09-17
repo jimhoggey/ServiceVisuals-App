@@ -29,6 +29,14 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.37.0": [
+        "Background: IMAGES turns gold the moment you click it, so you can "
+        "see it's on.",
+        "To add another picture, click + ADD IMAGE at the end of your "
+        "thumbnails.",
+        "Fixed: the three background buttons stay on one row instead of "
+        "wrapping onto two.",
+    ],
     "1.36.0": [
         "Fixed: reopening the app mid-render or mid-download no longer "
         "deletes that file.",
