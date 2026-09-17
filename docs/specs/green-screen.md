@@ -21,7 +21,7 @@ button `GREEN SCREEN` (`id="timer-bg-green"`, `type="button"`,
 | Green on | Green off |
 |---|---|
 | Button shows pressed (green outline/text, small green swatch dot). | Normal `.btn` look. |
-| Image strip, `+ ADD IMAGE`, SECONDS PER IMAGE, DIM, BLUR all hidden. | Exactly today's `applyTimerBg()` rules. |
+| Image strip, SECONDS PER IMAGE, DIM, BLUR all hidden. `+ ADD IMAGE` itself stays visible (owner request, v1.36.0): with it hidden, the only other visible choice was one toggle, so there appeared to be two background options instead of three. Clicking it turns green screen and transparent off, and it shows a gold selected state while images are the background. | Exactly today's `applyTimerBg()` rules. |
 | `timer-bg-empty` hint shown, text: `Solid green — key it out in your video software to put your own background behind the numbers.` | Hint text `No images — plain dark background.` shown only when the set is empty. |
 | Preview canvas is flat `#00ff00`, digits/ring/bar drawn on top as today, **no** digit shadow halo. | Unchanged. |
 

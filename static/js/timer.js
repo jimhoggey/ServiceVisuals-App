@@ -324,7 +324,11 @@
     // hides while green is on — timerBg.ids itself is untouched, so
     // turning green back off restores the strip exactly as it was.
     $("timer-bg-strip").hidden = hideImages;
-    $("timer-bg-add").hidden = hideImages;
+    // + ADD IMAGE stays visible whatever is chosen: with TRANSPARENT on
+    // and it hidden, GREEN SCREEN looked like the only alternative, so
+    // there appeared to be two background choices instead of three. It
+    // reads as selected exactly when images really are the background.
+    $("timer-bg-add").classList.toggle("is-selected", !hideImages && any);
     // The picker's own trigger just went hidden above; if it was left open
     // from before green/transparent was switched on, close it rather than
     // leave an orphaned panel with no visible way back to it.
@@ -1240,6 +1244,17 @@
   // modal) rather than a native file dialog directly, because it also
   // offers the already-stored library to reuse (spec).
   $("timer-bg-add").addEventListener("click", function () {
+    // Images, green screen and transparent are one choice: picking images
+    // turns the other two off, the same way each of those already turns
+    // the other off. Images chosen earlier come straight back.
+    var cancelled = false;
+    ["timer-bg-green", "timer-bg-transparent"].forEach(function (id) {
+      if ($(id).getAttribute("aria-pressed") === "true") {
+        $(id).setAttribute("aria-pressed", "false");
+        cancelled = true;
+      }
+    });
+    if (cancelled) updateTimer();
     if ($("timer-bg-picker").hidden) openTimerBgPicker();
     else closeTimerBgPicker();
   });

@@ -1053,6 +1053,17 @@ canvas {
   box-shadow: 0 0 6px rgba(63, 220, 123, 0.75);
 }
 
+/* ---- Images: + ADD IMAGE selected ---- */
+/* The three background choices sit side by side and only one is the
+   background at a time. ADD IMAGE had no selected look, so with images
+   in use nothing showed which choice was active. Accent gold, so all
+   three read differently at a glance: green, white, gold. */
+#timer-bg-add.is-selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(232, 180, 79, 0.1);
+}
+
 /* ---- Transparent toggle (spec: docs/specs/alpha-export.md) ---- */
 /* Same subtle .btn-file treatment as green screen above. Off state is the
    same neutral dot; ON, it becomes a tiny checkerboard instead of a
