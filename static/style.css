@@ -970,10 +970,50 @@ canvas {
 
 .bg-strip-wrap {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   margin-bottom: 8px;
+}
+
+/* The three background choices share one row and must never wrap: a
+   wrapped row read as two choices plus a stray one (docs/user-flows.md,
+   rule 6). The settings column is only 320-410px wide beside the preview,
+   so the buttons split the row equally and a long label may break onto a
+   second line INSIDE its button rather than push the row apart. */
+.bg-choices {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.bg-choices .btn-file {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  text-align: center;
+  white-space: normal;
+  line-height: 1.25;
+  padding-left: 6px;
+  padding-right: 6px;
+  /* Dot above label in all three, at every width. The dot used to sit
+     beside the label wherever it fitted and stack only where it did not,
+     so at two-column widths "+ ADD IMAGE" (no dot) sat ~7px higher than
+     its neighbours. One shape everywhere keeps the labels level, and the
+     label never shares a line with its dot. */
+  flex-direction: column;
+  gap: 5px;
+  /* TRANSPARENT is one word and cannot break inside its button. At the
+     narrowest two-column width it fitted with exactly 0px to spare, and
+     Windows renders fonts slightly wider than macOS (untestable here), so
+     it could clip there. Tighter tracking in this row alone buys margin.
+     flex-wrap lets the dot and the word take separate lines, so the word
+     never has to share its line with the dot. overflow-wrap is break-word,
+     NOT anywhere: `anywhere` lowers the word's minimum width, so the
+     browser chopped "TRANSPAREN / T" mid-word on macOS instead of moving
+     the dot -- measurement said 18px spare, only a screenshot showed it.
+     break-word breaks a word only if it cannot fit on a line of its own. */
+  letter-spacing: 0.05em;
+  overflow-wrap: break-word;
 }
 
 .bg-strip {
@@ -994,6 +1034,36 @@ canvas {
   height: 43px;
   border-radius: 6px;
   overflow: visible;
+}
+
+/* "+" at the end of the thumbnails adds another image, now that + ADD IMAGE
+   switches images on and off instead. Thumbnail-sized, so it reads as the
+   next empty slot in the row. */
+.bg-thumb-add {
+  width: auto;
+}
+.bg-thumb-add-btn {
+  width: auto;
+  height: 100%;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  border: 1px dashed var(--line, #3a3d44);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-dim);
+  line-height: 1;
+  cursor: pointer;
+}
+.bg-thumb-add-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.bg-thumb-add-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .bg-thumb img {
   display: block;
@@ -1053,15 +1123,26 @@ canvas {
   box-shadow: 0 0 6px rgba(63, 220, 123, 0.75);
 }
 
-/* ---- Images: + ADD IMAGE selected ---- */
+/* ---- Images: the IMAGES switch ---- */
 /* The three background choices sit side by side and only one is the
    background at a time. ADD IMAGE had no selected look, so with images
    in use nothing showed which choice was active. Accent gold, so all
    three read differently at a glance: green, white, gold. */
-#timer-bg-add.is-selected {
+#timer-bg-images[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
   background: rgba(232, 180, 79, 0.1);
+}
+/* A dot like its two neighbours', so all three buttons share one shape. */
+.btn-images-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6a6e75;
+}
+#timer-bg-images[aria-pressed="true"] .btn-images-dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(232, 180, 79, 0.75);
 }
 
 /* ---- Transparent toggle (spec: docs/specs/alpha-export.md) ---- */

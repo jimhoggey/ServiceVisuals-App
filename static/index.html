@@ -307,14 +307,20 @@
             <legend>Background</legend>
 
             <div class="bg-strip-wrap">
-              <ul class="bg-strip" id="timer-bg-strip"></ul>
               <p class="hint bg-strip-empty" id="timer-bg-empty">No images &#8212; plain dark background.</p>
-              <button type="button" class="btn btn-file" id="timer-bg-add" aria-haspopup="true" aria-expanded="false">+ ADD IMAGE</button>
-              <button type="button" class="btn btn-file" id="timer-bg-green" aria-pressed="false"><span class="btn-green-dot" aria-hidden="true"></span>GREEN SCREEN</button>
-              <!-- Transparent export (spec: docs/specs/alpha-export.md)
-                   -- same shape as GREEN SCREEN above, mutually exclusive
-                   with it (see the click handlers in timer.js). -->
-              <button type="button" class="btn btn-file" id="timer-bg-transparent" aria-pressed="false"><span class="btn-alpha-dot" aria-hidden="true"></span>TRANSPARENT</button>
+              <!-- The three background choices get a row of their own. They
+                   used to share one wrapping row with the caption and the
+                   thumbnails, so which button got pushed onto a second line
+                   changed with the number of images. docs/user-flows.md -->
+              <div class="bg-choices">
+                <button type="button" class="btn btn-file" id="timer-bg-images" aria-pressed="false"><span class="btn-images-dot" aria-hidden="true"></span>IMAGES</button>
+                <button type="button" class="btn btn-file" id="timer-bg-green" aria-pressed="false"><span class="btn-green-dot" aria-hidden="true"></span>GREEN SCREEN</button>
+                <!-- Transparent export (spec: docs/specs/alpha-export.md)
+                     -- same shape as GREEN SCREEN above, mutually exclusive
+                     with it (see the click handlers in timer.js). -->
+                <button type="button" class="btn btn-file" id="timer-bg-transparent" aria-pressed="false"><span class="btn-alpha-dot" aria-hidden="true"></span>TRANSPARENT</button>
+              </div>
+              <ul class="bg-strip" id="timer-bg-strip"></ul>
             </div>
 
             <!-- Coordinator-directed addition (round 2 of the copy

@@ -23,6 +23,16 @@
   // in-place as images are added/deleted through this same panel.
   var timerBg = { ids: [], library: null };
 
+  // IMAGES is a toggle like GREEN SCREEN and TRANSPARENT (owner decision,
+  // docs/user-flows.md): pressed means images really are the background.
+  // It was labelled "+ ADD IMAGE" until a review found that volunteers
+  // clicked it to add a second image and switched their images off
+  // instead; the "+ ADD IMAGE" action now lives in the thumbnail row. Stored images can exist while it is off -- switching
+  // images off keeps them, so the count alone no longer says which.
+  function bgImagesOn() {
+    return $("timer-bg-images").getAttribute("aria-pressed") === "true";
+  }
+
   // Preview Image objects, cached by (id, blur) so a redraw triggered by an
   // unrelated keystroke (dim slider, warn checkbox, ...) never re-fetches
   // or re-decodes an image that is already on screen — without this cache
@@ -149,11 +159,31 @@
       li.appendChild(x);
       strip.appendChild(li);
     });
-    $("timer-bg-empty").hidden = timerBg.ids.length > 0;
-    var atCap = timerBg.ids.length >= 10;
-    $("timer-bg-add").disabled = atCap;
-    $("timer-bg-add").title = atCap
-      ? "A timer can use up to 10 background images." : "";
+    // "+" adds another image. + ADD IMAGE now switches images on and off,
+    // so it can no longer be the way to add a second one. The 10-image
+    // cap disables THIS, never + ADD IMAGE: that is the only way left to
+    // switch images off, and disabling it would trap an operator with
+    // images they could not turn off.
+    if (timerBg.ids.length >= 1) {
+      var atCap = timerBg.ids.length >= 10;
+      var addLi = document.createElement("li");
+      addLi.className = "bg-thumb bg-thumb-add";
+      var addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "bg-thumb-add-btn";
+      // Visible words, not a bare "+": the unlabelled glyph went unfound,
+      // and volunteers reached for the IMAGES switch instead.
+      addBtn.textContent = "+ ADD IMAGE";
+      addBtn.disabled = atCap;
+      addBtn.title = atCap ? "A timer can use up to 10 background images."
+                           : "Add another image";
+      addBtn.setAttribute("aria-label", addBtn.title);
+      addBtn.addEventListener("click", openTimerBgPicker);
+      addLi.appendChild(addBtn);
+      strip.appendChild(addLi);
+    }
+    // #timer-bg-empty is decided in applyTimerBg() alone, which every
+    // caller runs straight after this -- it used to be set in both.
   }
 
   function addTimerBg(id) {
@@ -225,7 +255,6 @@
 
   function openTimerBgPicker() {
     $("timer-bg-picker").hidden = false;
-    $("timer-bg-add").setAttribute("aria-expanded", "true");
     // Re-fetch every time the panel opens (it's one small JSON GET) rather
     // than trusting a cache that could have gone stale while this view sat
     // unopened — an empty array is still truthy, so "already fetched once"
@@ -235,7 +264,6 @@
 
   function closeTimerBgPicker() {
     $("timer-bg-picker").hidden = true;
-    $("timer-bg-add").setAttribute("aria-expanded", "false");
   }
 
   function uploadTimerBg(file) {
@@ -317,7 +345,16 @@
     // the same reason green screen does — there is no background to pick
     // images for — so every place below that used to check `green` alone
     // now checks either one.
-    var hideImages = green || transparent;
+    var imagesOn = bgImagesOn();
+    // Backed out: images chosen, panel closed, nothing picked. Images are
+    // not really the background, so + ADD IMAGE returns to plain. Covers
+    // DONE with nothing picked, and removing the last thumbnail.
+    if (imagesOn && timerBg.ids.length === 0 &&
+        $("timer-bg-picker").hidden) {
+      $("timer-bg-images").setAttribute("aria-pressed", "false");
+      imagesOn = false;
+    }
+    var hideImages = !imagesOn;
     var multi = timerBg.ids.length >= 2;
     var any = timerBg.ids.length >= 1;
     // Green screen (spec: docs/specs/green-screen.md): the whole image UI
@@ -326,9 +363,8 @@
     $("timer-bg-strip").hidden = hideImages;
     // + ADD IMAGE stays visible whatever is chosen: with TRANSPARENT on
     // and it hidden, GREEN SCREEN looked like the only alternative, so
-    // there appeared to be two background choices instead of three. It
-    // reads as selected exactly when images really are the background.
-    $("timer-bg-add").classList.toggle("is-selected", !hideImages && any);
+    // there appeared to be two background choices instead of three. Its
+    // selected look is aria-pressed, the same as its two neighbours.
     // The picker's own trigger just went hidden above; if it was left open
     // from before green/transparent was switched on, close it rather than
     // leave an orphaned panel with no visible way back to it.
@@ -450,8 +486,16 @@
       emptyHint.hidden = false;
       emptyHint.textContent = "Solid green — key it out in your " +
           "video software to put your own background behind the numbers.";
+    } else if (imagesOn && any) {
+      emptyHint.hidden = true;        // the thumbnails say it
+    } else if (any) {
+      // Images stored but switched off: without this the background went
+      // dark with nothing on screen to say why.
+      emptyHint.hidden = false;
+      emptyHint.textContent = "Images are off — plain dark background. " +
+          "Click IMAGES to bring them back.";
     } else {
-      emptyHint.hidden = any;
+      emptyHint.hidden = false;
       emptyHint.textContent = "No images — plain dark background.";
     }
   }
@@ -467,9 +511,11 @@
     // set (kept in memory so turning either off restores it) must never
     // block an export — the ids aren't even sent while either is on
     // (readTimer() forces backgrounds to []).
-    var green = $("timer-bg-green").getAttribute("aria-pressed") === "true";
-    var transparent = $("timer-bg-transparent").getAttribute("aria-pressed") === "true";
-    if (!green && !transparent && timerBg.ids.length > 10) {
+    // Only images that are really the background can block an export:
+    // stored-but-switched-off ones are never sent (rule 4 in
+    // docs/user-flows.md -- nothing hidden may block the operator).
+    if (!bgImagesOn()) return null;
+    if (timerBg.ids.length > 10) {
       return "A timer can use up to 10 background images.";
     }
     if (timerBg.ids.length >= 2) {
@@ -542,7 +588,7 @@
       // hasBg (backgrounds.length > 0, used throughout for the digit-
       // shadow halo) and the export payload are both right by
       // construction — no separate case needed anywhere downstream.
-      backgrounds: (green || transparentOn) ? [] : timerBg.ids.slice(),
+      backgrounds: bgImagesOn() ? timerBg.ids.slice() : [],
       bgSeconds: toInt($("timer-bg-seconds").value, 10),
       bgDim: toInt($("timer-bg-dim").value, 45),
       bgBlur: $("timer-bg-blur").checked
@@ -1243,22 +1289,30 @@
   // Background images: "+ ADD IMAGE" opens a small inline picker (not a
   // modal) rather than a native file dialog directly, because it also
   // offers the already-stored library to reuse (spec).
-  $("timer-bg-add").addEventListener("click", function () {
-    // Images, green screen and transparent are one choice: picking images
-    // turns the other two off, the same way each of those already turns
-    // the other off. Images chosen earlier come straight back.
-    var cancelled = false;
-    ["timer-bg-green", "timer-bg-transparent"].forEach(function (id) {
-      if ($(id).getAttribute("aria-pressed") === "true") {
-        $(id).setAttribute("aria-pressed", "false");
-        cancelled = true;
-      }
-    });
-    if (cancelled) updateTimer();
-    if ($("timer-bg-picker").hidden) openTimerBgPicker();
-    else closeTimerBgPicker();
+  $("timer-bg-images").addEventListener("click", function () {
+    // A toggle like its two neighbours (owner decision,
+    // docs/user-flows.md): selected the instant it is clicked, and
+    // clicking it again switches images off. They are kept, not deleted,
+    // and come back on the next click. Adding a SECOND image is the "+"
+    // at the end of the thumbnails.
+    var on = this.getAttribute("aria-pressed") === "true";
+    this.setAttribute("aria-pressed", on ? "false" : "true");
+    if (on) {
+      closeTimerBgPicker();
+    } else {
+      $("timer-bg-green").setAttribute("aria-pressed", "false");
+      $("timer-bg-transparent").setAttribute("aria-pressed", "false");
+      // Open the picker only when there is nothing to show yet. Turning
+      // stored images back on used to reopen it every time, an extra
+      // close for a volunteer who only wanted their images back.
+      if (timerBg.ids.length === 0) openTimerBgPicker();
+    }
+    updateTimer();
   });
-  $("timer-bg-picker-close").addEventListener("click", closeTimerBgPicker);
+  $("timer-bg-picker-close").addEventListener("click", function () {
+    closeTimerBgPicker();
+    updateTimer();    // closing with nothing picked backs images out
+  });
   $("timer-bg-upload").addEventListener("change", function () {
     var file = this.files && this.files[0];
     if (file) uploadTimerBg(file);
@@ -1272,7 +1326,10 @@
     this.setAttribute("aria-pressed", pressed ? "false" : "true");
     // Transparent (spec: docs/specs/alpha-export.md): mutually exclusive
     // with green — turning green ON forces transparent OFF.
-    if (!pressed) $("timer-bg-transparent").setAttribute("aria-pressed", "false");
+    if (!pressed) {
+      $("timer-bg-transparent").setAttribute("aria-pressed", "false");
+      $("timer-bg-images").setAttribute("aria-pressed", "false");
+    }
     updateTimer();
   });
   // Transparent (spec: docs/specs/alpha-export.md): mirror image of the
@@ -1281,7 +1338,10 @@
   $("timer-bg-transparent").addEventListener("click", function () {
     var pressed = this.getAttribute("aria-pressed") === "true";
     this.setAttribute("aria-pressed", pressed ? "false" : "true");
-    if (!pressed) $("timer-bg-green").setAttribute("aria-pressed", "false");
+    if (!pressed) {
+      $("timer-bg-green").setAttribute("aria-pressed", "false");
+      $("timer-bg-images").setAttribute("aria-pressed", "false");
+    }
     updateTimer();
   });
 
