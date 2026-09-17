@@ -35,6 +35,19 @@ Owner: Fynn (GitHub `jimhoggey`). Repo: **jimhoggey/ServiceVisuals-App** (public
   extracted frame revealed in seconds. Render the real thing, pull frames with
   the bundled ffmpeg (`imageio_ffmpeg.get_ffmpeg_exe()`), and view them. Same
   for UI: drive it in the browser, don't ask the owner to check.
+- **`docs/user-flows.md` is the memory of how volunteers think.** Read the
+  screen's section before changing it, and update it after: add to "Found
+  and fixed" with the version, and record any open question's answer. When
+  the owner reports a confusion, add it under "Found, not yet fixed" before
+  fixing it, so nothing is lost between sessions. graphify indexes it, so a
+  query about a control surfaces its flow as well as its code.
+- **Every change to `static/*` goes through the `ux-flow-reviewer` agent
+  before it ships** (`.claude/agents/ux-flow-reviewer.md`). Browser state
+  checks only prove the code matches the implementer's own rule; they kept
+  passing UI that confused the owner, because the rule itself was wrong
+  from the operator's side. The reviewer walks real journeys — empty state,
+  click twice, switch back, narrow window (1024/900/768) — and screenshots
+  each step.
 
 ## Running it
 
