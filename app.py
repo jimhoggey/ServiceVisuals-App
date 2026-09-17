@@ -25,7 +25,7 @@ import stats
 import updater
 import whatsnew
 import tools
-from downloader import ERROR_REASONS, download_video
+from downloader import ERROR_REASONS, JOB_TIMEOUT, download_video
 from jobs import JobManager
 from render.encoder import EXPORTS_DIR, UPLOADS_DIR
 from render.timer import render_timer
@@ -458,6 +458,48 @@ def api_reveal():
     return jsonify({"ok": True})
 
 
+# A .part file is only abandoned once nothing can still be writing it. A
+# live render rewrites its .part continuously -- measured on a 60 fps
+# transparent render: 42 writes in 4.5s, never more than 0.11s apart --
+# and the YouTube downloader, which leaves yt-dlp's own .part files in
+# this same folder, is killed after JOB_TIMEOUT. So a .part untouched
+# for longer than that belongs to a job that cannot still be running.
+_STALE_PART_SECONDS = JOB_TIMEOUT + 60
+
+
+def sweep_stale_parts(folder, now=None):
+    """Delete .part files in `folder` that nothing has written to for
+    _STALE_PART_SECONDS; return how many were removed.
+
+    This used to delete every .part at startup, on the theory that any
+    one of them was left behind by a killed server. But nothing stops a
+    second copy of the app from launching, and its startup deleted the
+    FIRST copy's render in progress: ffmpeg kept writing to the now
+    nameless file (an unlinked file stays writable on macOS), finished
+    all 54,300 frames of a 15-minute timer, then failed at +faststart's
+    re-open with \"No such file or directory\". On Windows the unlink
+    itself raises for a file another process holds open, which would
+    have crashed that second launch instead -- reasoned, not tested
+    there. Either way, the fix is to leave anything still being written.
+    """
+    if now is None:
+        now = time.time()
+    removed = 0
+    for name in os.listdir(folder):
+        if not name.endswith(".part"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            if now - os.path.getmtime(path) > _STALE_PART_SECONDS:
+                os.unlink(path)
+                removed += 1
+        except OSError:
+            # Renamed or finished between listdir() and here, or held
+            # open by a live writer: either way it is not ours to take.
+            pass
+    return removed
+
+
 def prepare_exports_dir():
     # Seeded FIRST, before anything else touches CONFIG_DIR: in particular
     # stats.report_previous_boot() below drops its own boot-pending.json
@@ -476,10 +518,9 @@ def prepare_exports_dir():
     # Visuals release: a background thread, a no-op unless it has been a
     # day, and skipped entirely if the tools were never fetched.
     tools.start_background_update()
-    # Sweep leftovers from renders that a killed server never finished.
-    for leftover in os.listdir(EXPORTS_DIR):
-        if leftover.endswith(".part"):
-            os.unlink(os.path.join(EXPORTS_DIR, leftover))
+    # Sweep leftovers from renders and downloads a killed server never
+    # finished -- only the stale ones (see sweep_stale_parts).
+    sweep_stale_parts(EXPORTS_DIR)
 
 
 if __name__ == "__main__":

@@ -2981,6 +2981,68 @@ def check_millis_60fps_off_stays_30fps():
                 os.unlink(path)
 
 
+def check_stale_part_sweep():
+    """app.sweep_stale_parts: the startup sweep must only take .part
+    files nothing is writing. It used to take all of them, so opening a
+    second copy of the app mid-render deleted the render in progress and
+    a 15-minute timer failed at its very last step. Nothing tested the
+    sweep at all, which is how that shipped."""
+    import time
+    from PIL import Image
+    import app as _app
+    from render.encoder import FrameEncoder, EncoderError
+
+    print("Exports: the startup .part sweep leaves live files alone")
+    folder = tempfile.mkdtemp(prefix="sv-smoke-sweep-")
+    try:
+        stale = _app._STALE_PART_SECONDS
+        now = time.time()
+
+        def make(name, age):
+            path = os.path.join(folder, name)
+            with open(path, "wb") as fh:
+                fh.write(b"x")
+            os.utime(path, (now - age, now - age))
+            return path
+
+        fresh = make("live-render.mov.part", 0)
+        near = make("stalled-download.mp3.part", stale - 60)
+        dead = make("killed-server.mp4.part", stale + 60)
+        other = make("finished.mp4", stale + 60)
+        removed = _app.sweep_stale_parts(folder, now=now)
+
+        check("a .part written just now is kept", os.path.exists(fresh))
+        check("a .part silent for less than the job timeout is kept "
+              "(a download can legitimately stall that long)",
+              os.path.exists(near))
+        check("a .part silent for longer than any job can run is removed",
+              not os.path.exists(dead))
+        check("a finished export is never touched, however old",
+              os.path.exists(other))
+        check("the sweep reports exactly one removal", removed == 1,
+              "got {0}".format(removed))
+
+        # The actual failure: a real encode with the sweep run part-way
+        # through, exactly as a second app launch would, then finished.
+        # Before the fix this raised "Unable to re-open ... No such file
+        # or directory" at +faststart; it must now complete.
+        out = os.path.join(folder, "mid-render.mov")
+        enc = FrameEncoder(out, 30, alpha_format="qtrle")
+        blank = Image.new("RGBA", (1920, 1080), (0, 0, 0, 0))
+        for _ in range(30):
+            enc.add_frame(blank)
+        _app.sweep_stale_parts(folder)
+        try:
+            enc.close()
+            ok, detail = os.path.exists(out), ""
+        except EncoderError as exc:
+            ok, detail = False, str(exc)[-200:]
+        check("a render survives the sweep running mid-encode (a second "
+              "app launch no longer deletes it)", ok, detail)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 def check_https_goes_through_netutil():
     """Every outbound HTTPS call must use netutil.urlopen. A frozen build has
     no CA bundle on disk, so a plain urllib.request.urlopen verifies against
@@ -3208,6 +3270,7 @@ def main():
     check_js_modules()
     print()
 
+    check_stale_part_sweep()
     check_https_goes_through_netutil()
     print()
 
