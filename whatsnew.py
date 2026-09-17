@@ -29,6 +29,12 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.36.0": [
+        "Fixed: reopening the app mid-render or mid-download no longer "
+        "deletes that file.",
+        "Background: ADD IMAGE, GREEN SCREEN and TRANSPARENT now always "
+        "show, side by side.",
+    ],
     "1.35.0": [
         "Timer: full-size milliseconds — the .000 matches the minutes "
         "and seconds.",
