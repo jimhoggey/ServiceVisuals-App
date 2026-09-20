@@ -1936,6 +1936,83 @@ def check_download_retry_and_remove():
           all(d > 0 for d in delays) and sum(delays) <= 90,
           "got {0!r}".format(delays))
 
+    # No console window on Windows. The app is --windowed, so a bare
+    # spawn of a console program hands it a visible black box for the
+    # whole download; closing that box kills the download and the app
+    # then blames YouTube. encoder.py has always done this for ffmpeg;
+    # every yt-dlp spawn was missed until a Windows report.
+    real_platform = sys.platform
+    try:
+        sys.platform = "win32"
+        win_kwargs = tools.no_console_kwargs()
+    finally:
+        sys.platform = real_platform
+    check("Windows spawns ask for CREATE_NO_WINDOW",
+          win_kwargs == {"creationflags": 0x08000000},
+          "got {0!r}".format(win_kwargs))
+    check("other platforms add no spawn flags",
+          tools.no_console_kwargs() == {})
+    # Source guard: every yt-dlp spawn must route through that helper. A
+    # new one added without it would put the black box back, and no test
+    # on this machine could see it.
+    import inspect
+    for mod, name in ((tools, "tools.py"), (downloader, "downloader.py")):
+        src = inspect.getsource(mod)
+        spawns = [ln for ln in src.splitlines()
+                  if ("subprocess.run(" in ln or "subprocess.Popen(" in ln)]
+        covered = src.count("no_console_kwargs()")
+        check("{0}: every subprocess spawn is paired with "
+              "no_console_kwargs".format(name),
+              covered >= len(spawns),
+              "{0} spawns, {1} uses".format(len(spawns), covered))
+
+    # Checksum parsing. Deno serves a DIFFERENT format per platform, and
+    # knowing only the Unix one meant Deno could never install on
+    # Windows: no digest found, so every download died on "The
+    # downloader's files did not verify" (reported from a real Windows
+    # machine on v1.37.0). Both samples below are the real published
+    # bytes for deno v2.9.6.
+    unix_sums = ("213a2f304f04d3c9cb5220669afad138f60a5aab1fe80962abdeb"
+                 "8f35807a472  deno-aarch64-apple-darwin.zip\n")
+    check("unix-style checksums still parse",
+          tools._find_sha256(unix_sums, "deno-aarch64-apple-darwin.zip")
+          == ("213a2f304f04d3c9cb5220669afad138f60a5aab1fe80962abdeb"
+              "8f35807a472"))
+    win_sums = (
+        "\nAlgorithm : SHA256\n"
+        "Hash      : 15E5300B0BA3C3695A7621D90160A746EC9E710228CEE639"
+        "AFA9D580F6E3CD11\n"
+        "Path      : C:\\a\\deno\\deno\\target\\release\\"
+        "deno-x86_64-pc-windows-msvc.zip\n")
+    check("Windows PowerShell Get-FileHash checksums parse",
+          tools._find_sha256(win_sums, "deno-x86_64-pc-windows-msvc.zip")
+          == ("15E5300B0BA3C3695A7621D90160A746EC9E710228CEE639"
+              "AFA9D580F6E3CD11"))
+    check("a PowerShell block naming a DIFFERENT asset is refused",
+          tools._find_sha256(win_sums, "deno-aarch64-pc-windows-msvc.zip")
+          is None)
+    check("a bare Hash with no Path is accepted (URL is per-asset)",
+          tools._find_sha256(
+              "Hash : " + ("a" * 64), "deno-x86_64-pc-windows-msvc.zip")
+          == "a" * 64)
+    check("a PowerShell block with no digest at all is refused",
+          tools._find_sha256("Algorithm : SHA256\nPath : C:\\x\\a.zip",
+                             "a.zip") is None)
+    # End to end: an UPPERCASE digest out of a Windows block must satisfy
+    # verify_sha256, which is what _download_verified actually calls.
+    import hashlib as _hashlib
+    probe = os.path.join(tools.BIN_DIR, "probe.bin")
+    os.makedirs(tools.BIN_DIR, exist_ok=True)
+    with open(probe, "wb") as fh:
+        fh.write(b"service visuals")
+    real = _hashlib.sha256(b"service visuals").hexdigest()
+    upper_block = ("Algorithm : SHA256\nHash      : " + real.upper() +
+                   "\nPath      : C:\\a\\probe.bin\n")
+    check("an uppercase Windows digest verifies a real file",
+          tools.verify_sha256(
+              probe, tools._find_sha256(upper_block, "probe.bin")))
+    os.unlink(probe)
+
     os.makedirs(tools.BIN_DIR, exist_ok=True)
     ytdlp_path, deno_path = tools.binary_paths()
     fakes = [ytdlp_path, deno_path, tools.STAMP_PATH, tools.VERSION_PATH,
@@ -1945,6 +2022,17 @@ def check_download_retry_and_remove():
             fh.write(b"x")
     check("status reads ready with the fake binary present",
           tools.tools_status()["ready"])
+    # Half an install must NOT read as ready — that is what told the
+    # owner "Downloader ready" while every download failed — but it must
+    # still read as installed, or REMOVE hides and the 120 MB is stuck.
+    os.unlink(deno_path)
+    half = tools.tools_status()
+    check("yt-dlp alone is not 'ready'", half["ready"] is False,
+          "got {0!r}".format(half))
+    check("yt-dlp alone still counts as installed, so REMOVE stays",
+          half["installed"] is True, "got {0!r}".format(half))
+    with open(deno_path, "wb") as fh:
+        fh.write(b"x")
 
     # Launch-time self-update: off the UI thread, and above all it must
     # never fetch anything on its own — a fresh install that has never

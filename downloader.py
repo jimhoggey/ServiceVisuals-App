@@ -359,9 +359,12 @@ def download_video(options, progress_cb):
 def _run_once(args, needs_fetch, progress_cb):
     """One yt-dlp run. Returns (exit code, result path or None, stderr
     tail) — the caller decides whether a failure is worth retrying."""
+    # No console window on Windows: without this every download opens an
+    # empty black box for its whole run, and closing that box kills the
+    # download (tools.no_console_kwargs).
     proc = subprocess.Popen(
         args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1)
+        text=True, bufsize=1, **tools.no_console_kwargs())
 
     printed_lines = []
     stderr_tail = collections.deque(maxlen=40)

@@ -217,13 +217,22 @@
       })
       .then(function (j) {
         toolsReady = !!(j && j.ready);
-        // REMOVE only makes sense once there is something to remove.
-        $("download-tools-remove").hidden = !toolsReady;
+        // REMOVE is about disk, not readiness: half an install is still
+        // 120 MB sitting there, and it has to be clearable. Gating this
+        // on `ready` would have hidden it from exactly the operator who
+        // needed it — one whose Deno never installed.
+        var installed = !!(j && (j.installed || j.ready));
+        $("download-tools-remove").hidden = !installed;
         if (toolsReady) {
           // The version is recorded after a download's update check, so
           // it can be unknown on a fresh setup — say "ready" without it.
           $("download-tools").textContent = "Downloader ready" +
             (j.ytdlp_version ? " · yt-dlp " + j.ytdlp_version : "");
+        } else if (installed) {
+          // Never claim ready while a piece is missing (the Windows
+          // checksum bug: the tile said ready and every download failed).
+          $("download-tools").textContent =
+            "The downloader is half set up — the next download finishes it.";
         } else {
           $("download-tools").textContent =
             "The first download sets up the downloader (about 75 MB, one time).";

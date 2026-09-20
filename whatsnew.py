@@ -29,6 +29,14 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.39.0": [
+        "Fixed on Windows: the downloader could never install, so no "
+        "YouTube download worked.",
+        "Windows: downloads no longer open a black window that stopped "
+        "them if you closed it.",
+        "The tile no longer says the downloader is ready while half of "
+        "it is missing.",
+    ],
     "1.38.0": [
         "Background: drag images straight onto the timer, or pick several "
         "at once.",

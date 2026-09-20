@@ -17,6 +17,7 @@ All network code lives here, and only here, so `downloader.py` and
 import hashlib
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -105,6 +106,34 @@ def binary_paths():
 
 # ------------------------------------------------------------ sha256/http
 
+# A bare sha256, used to tell a real digest from the other values in a
+# PowerShell Get-FileHash block (see _find_sha256).
+_HEX64_RE = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def no_console_kwargs():
+    """subprocess kwargs that stop a console program opening its own
+    window on Windows.
+
+    The app is built --windowed, so it has no console of its own; when it
+    spawns a console-subsystem child (yt-dlp.exe, ffmpeg.exe) Windows
+    hands that child a brand new visible console. render/encoder.py has
+    done this for ffmpeg since the renders started flashing a black box,
+    and updater.py detaches its helper for the same reason — but every
+    yt-dlp spawn was missed, so a Windows volunteer got an empty black
+    window for the length of a download (up to JOB_TIMEOUT, 30 minutes).
+    Closing it is the natural reaction, and that kills the download:
+    Windows sends the close event to every process on that console, and
+    the failure then reports as the generic "YouTube may have changed
+    something", which is wrong about the cause.
+
+    Returns {} off Windows, so callers can always splat it.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": 0x08000000}        # CREATE_NO_WINDOW
+    return {}
+
+
 def verify_sha256(path, expected_hex):
     """True if the file at `path` sha256-hashes to `expected_hex`.
 
@@ -119,14 +148,51 @@ def verify_sha256(path, expected_hex):
 
 
 def _find_sha256(sums_text, asset_name):
-    """Pick the digest for `asset_name` out of a checksums file shaped
-    like ``<hex>  <name>`` per line — both yt-dlp's combined
-    SHA2-256SUMS and Deno's per-asset ``<asset>.sha256sum`` use this same
-    line format."""
+    """Pick the digest for `asset_name` out of a checksums file.
+
+    TWO formats, and Deno serves a different one depending on which
+    platform's asset you ask for:
+
+        <hex>  <name>               yt-dlp's SHA2-256SUMS, and Deno on
+                                    macOS and Linux
+        Algorithm : SHA256          Deno on WINDOWS — raw PowerShell
+        Hash      : <UPPERCASE>     Get-FileHash output, with the build
+        Path      : C:\\a\\...\\<name>  machine's own path, not the asset name
+
+    Knowing only the first is why the Windows downloader could never
+    install: no digest was found, so every attempt died on "The
+    downloader's files did not verify" while the tile still said the
+    downloader was ready (reported from a real Windows machine on
+    v1.37.0). verify_sha256 already compares case-insensitively, so the
+    uppercase digest needs no special handling once it is found.
+    """
     for line in sums_text.splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[-1].lstrip("*") == asset_name:
             return parts[0]
+
+    # PowerShell block. The sums URL is per-asset, so a lone Hash is for
+    # the file we asked for — but when a Path IS given it has to name that
+    # same file, or this is some other block and its digest is not ours.
+    digest = None
+    path_seen = False
+    path_matches = False
+    for line in sums_text.splitlines():
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "hash" and _HEX64_RE.fullmatch(value):
+            digest = value
+        elif key == "path" and value:
+            path_seen = True
+            # A Windows path, so backslashes separate it, not just "/".
+            leaf = value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+            if leaf == asset_name:
+                path_matches = True
+    if digest and (path_matches or not path_seen):
+        return digest
     return None
 
 
@@ -278,7 +344,8 @@ def update_ytdlp():
     if due:
         try:
             subprocess.run([ytdlp_path, "-U"], timeout=_UPDATE_TIMEOUT,
-                           capture_output=True, check=False)
+                           capture_output=True, check=False,
+                           **no_console_kwargs())
         except Exception as exc:
             log_line("update_ytdlp failed: {0}".format(exc))
         try:
@@ -314,7 +381,8 @@ def _ytdlp_version(ytdlp_path, refresh=False, timeout=10):
     try:
         result = subprocess.run(
             [ytdlp_path, "--version"], timeout=timeout,
-            capture_output=True, text=True, check=False)
+            capture_output=True, text=True, check=False,
+            **no_console_kwargs())
         version = result.stdout.strip() or None
     except Exception:
         version = None
@@ -332,8 +400,20 @@ def tools_status():
     tile shows on entry. `ready` is just "the file is there" — a broken
     binary would still show ready with no version rather than crashing
     the status endpoint."""
-    ytdlp_path, _ = binary_paths()
-    ready = os.path.isfile(ytdlp_path)
+    ytdlp_path, deno_path = binary_paths()
+    # `ready` means BOTH halves, not just yt-dlp. YouTube has needed a JS
+    # runtime since 2025, so a missing Deno means no download can
+    # succeed — and claiming "Downloader ready" beside that failure is
+    # exactly how the Windows checksum bug looked to the owner: the tile
+    # said ready, DOWNLOAD then tried to fetch the absent Deno and
+    # answered with a verify error instead.
+    #
+    # `installed` is the separate question "is there anything on disk to
+    # delete", which REMOVE is gated on. Half an install is still 120 MB,
+    # and the operator must be able to clear it.
+    has_ytdlp = os.path.isfile(ytdlp_path)
+    ready = has_ytdlp and os.path.isfile(deno_path)
+    installed = has_ytdlp or os.path.isfile(deno_path)
     # Cache only — never spawn the binary here (see VERSION_PATH). Until a
     # first download has recorded it, the version is simply unknown.
     version = None
@@ -343,7 +423,8 @@ def tools_status():
                 version = fh.read().strip() or None
         except OSError:
             version = None
-    return {"ready": ready, "ytdlp_version": version}
+    return {"ready": ready, "installed": installed,
+            "ytdlp_version": version}
 
 
 def start_background_update():

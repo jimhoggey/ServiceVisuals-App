@@ -298,11 +298,37 @@ Paste a link, choose MP4 or MP3, press DOWNLOAD.
   saved in your exports folder."**, not a lone filename.
 - **DOWNLOAD ANOTHER** clears the box for the next one.
 
+### What the status line promises
+
+"Downloader ready" is a promise that pressing DOWNLOAD will work. It must
+mean **both** halves are present — yt-dlp AND the Deno JS runtime YouTube
+has required since 2025 — because a volunteer reads it as "this is set
+up". A part-install says so instead, and REMOVE stays visible whenever
+there is anything on disk to delete, however broken.
+
 **Found and fixed**
 - v1.33.0 — the finished batch led with the last file's name, as though it
   were the only one, with "9 saved" small and dim beneath it.
 - v1.33.0 — DOWNLOAD ANOTHER re-downloaded the whole list. (Rule 8.)
 - v1.36.0 — reopening the app mid-download deleted the download in progress.
+- v1.39.0 — **on Windows the downloader could never install.** Deno
+  publishes its checksum as PowerShell `Get-FileHash` output for Windows
+  assets and as `<hex>  <name>` everywhere else; only the second was
+  understood, so every download ended in "The downloader's files did not
+  verify". Reported from a real Windows machine on v1.37.0.
+- v1.39.0 — the tile said **"Downloader ready"** directly above that
+  failure, because readiness was judged on yt-dlp alone. It now needs
+  both, and a half-install reads "The downloader is half set up — the next
+  download finishes it." (Rules 1 and 8.)
+- v1.39.0 — every download on Windows opened an **empty black console
+  window** for its whole run, and closing it killed the download and
+  reported it as a YouTube change. All three yt-dlp spawns now suppress
+  it, as the renderer already did for ffmpeg.
+
+**Found, not yet fixed**
+- A GPU-encoder failure on Windows shows raw ffmpeg text rather than a
+  sentence a volunteer can act on. Only reachable on Windows, only when
+  the hardware probe passes and the real encode then fails.
 
 ---
 
