@@ -1941,17 +1941,23 @@ def check_download_retry_and_remove():
     # whole download; closing that box kills the download and the app
     # then blames YouTube. encoder.py has always done this for ffmpeg;
     # every yt-dlp spawn was missed until a Windows report.
+    # Fake BOTH platforms rather than asking the host: this suite also
+    # runs on the Windows CI runner, where sys.platform really is win32
+    # and "no flags here" is simply false. The first version of this
+    # check assumed a Mac and turned the Windows build red.
     real_platform = sys.platform
     try:
         sys.platform = "win32"
         win_kwargs = tools.no_console_kwargs()
+        sys.platform = "darwin"
+        mac_kwargs = tools.no_console_kwargs()
     finally:
         sys.platform = real_platform
     check("Windows spawns ask for CREATE_NO_WINDOW",
           win_kwargs == {"creationflags": 0x08000000},
           "got {0!r}".format(win_kwargs))
     check("other platforms add no spawn flags",
-          tools.no_console_kwargs() == {})
+          mac_kwargs == {}, "got {0!r}".format(mac_kwargs))
     # Source guard: every yt-dlp spawn must route through that helper. A
     # new one added without it would put the black box back, and no test
     # on this machine could see it.
