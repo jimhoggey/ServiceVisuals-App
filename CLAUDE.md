@@ -29,7 +29,8 @@ Owner: Fynn (GitHub `jimhoggey`). Repo: **jimhoggey/ServiceVisuals-App** (public
   share, the exact API contract (key names, defaults, ranges, error strings),
   frame-rate rules, per-agent file ownership (disjoint), a "do not" list, and
   done-means. Then implementers in parallel + a reviewer. See
-  `docs/specs/clock-mode.md` for the format that works.
+  `docs/specs/clock-mode.md` for the format that works, and the `new-spec`
+  skill, which scaffolds those sections.
 - **Verify by rendering and looking.** Every feature so far has shipped
   something the implementing and reviewing agents both missed that one
   extracted frame revealed in seconds. Render the real thing, pull frames with
@@ -41,13 +42,16 @@ Owner: Fynn (GitHub `jimhoggey`). Repo: **jimhoggey/ServiceVisuals-App** (public
   the owner reports a confusion, add it under "Found, not yet fixed" before
   fixing it, so nothing is lost between sessions. graphify indexes it, so a
   query about a control surfaces its flow as well as its code.
-- **Every change to `static/*` goes through the `ux-flow-reviewer` agent
-  before it ships** (`.claude/agents/ux-flow-reviewer.md`). Browser state
-  checks only prove the code matches the implementer's own rule; they kept
-  passing UI that confused the owner, because the rule itself was wrong
-  from the operator's side. The reviewer walks real journeys — empty state,
-  click twice, switch back, narrow window (1024/900/768) — and screenshots
-  each step.
+- **`ux-flow-reviewer` is for user-flow DECISIONS, not a gate on every
+  change** (`.claude/agents/ux-flow-reviewer.md`). Reach for it when the
+  question is what a volunteer will believe — a control whose meaning is
+  in doubt, a layout the owner has already been confused by, a screen
+  nobody has walked. Do not run a half-hour full-coverage pass before
+  every release: the owner stopped one mid-flight for exactly that, and a
+  review that delays a ready feature is costing more than it finds. Scope
+  it to the journeys actually in question, and say what you skipped.
+  Verify the rest yourself in the browser, which is faster and usually
+  enough.
 
 ## Running it
 
@@ -92,6 +96,20 @@ PORT=8799 SERVICE_VISUALS_STATS=0 .venv/bin/python app.py   # dev server
 - **Analytics are surface-level by design.** `stats.py` sends event NAME +
   version + OS only, never content. Do not add a prop carrying user text, file
   names or paths. Crash reports send the error's *shape*, scrubbed.
+- **Some of these rules are enforced by hooks now** (`.claude/settings.json`),
+  so a Bash call can come back denied. It refuses a `git add`/`git commit`
+  that would carry church content, an `app.py` or `scripts/smoke.py` run
+  without `SERVICE_VISUALS_STATS=0`, and `app.py` on port 8765; it asks
+  before `golden.py --record`. Editing a `.py` file runs pyflakes on it;
+  editing a renderer reminds you which guard applies. Keep those commands
+  path-independent — they resolve the venv from the edited file's own git
+  root, because the previous hardcoded path silently disabled pyflakes for
+  months after the repo moved machines, and this file is public.
+- **Two reviewers exist for the things that can't be checked by running
+  them**: `windows-compat-reviewer` for anything touching `updater.py`,
+  `tools.py`, the encoders or packaging, and `supply-chain-reviewer` for
+  changes to the code that downloads binaries or replaces the app. The
+  `release-notes` skill drafts the What's New entry and the release commit.
 - **Windows can't be tested here.** The self-update helper, `winocr` detection
   and the GPU encoder are macOS-unverifiable. Reason carefully, say plainly
   what is unverified, and prefer designs that fail visibly over silently.

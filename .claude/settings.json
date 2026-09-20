@@ -1,14 +1,33 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "c=$(jq -r '.tool_input.command // empty'); [ -n \"$c\" ] || exit 0\nsay() { jq -n --arg d \"$1\" --arg r \"$2\" '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:$d,permissionDecisionReason:$r}}'; exit 0; }\ncase \"$c\" in *\"git add\"*|*\"git commit\"*)\n  bad=$({ printf '%s\\n' \"$c\"; git diff --cached --name-only 2>/dev/null; } | grep -Ei 'Grouppoints\\.png|ChatGPT Image|Summit-[^ ]*\\.png' | head -3)\n  [ -z \"$bad\" ] || say deny \"Church content must never reach this public repo (CLAUDE.md). Matched: $bad -- unstage it with git restore --staged <file> and check .gitignore still covers it.\" ;;\nesac\ncase \"$c\" in *golden.py*--record*)\n  say ask \"golden.py --record REWRITES golden.json wholesale and keeps only the jobs this run rendered; every job not rendered is silently dropped from the guard. Use --check unless re-recording is the intent.\" ;;\nesac\ncase \"$c\" in *\"python app.py\"*|*\"python3 app.py\"*|*\"python scripts/smoke.py\"*|*\"python3 scripts/smoke.py\"*|\"./run.sh\"*|*\"&& ./run.sh\"*|*\"; ./run.sh\"*|*\"sh run.sh\"*)\n  case \"$c\" in *SERVICE_VISUALS_STATS=0*) ;; *) say deny \"Set SERVICE_VISUALS_STATS=0 outside a real release (CLAUDE.md) so this run stays out of the owner's analytics. run.sh sets neither this nor PORT -- use PORT=8799 SERVICE_VISUALS_STATS=0 .venv/bin/python app.py, or the service-visuals-dev preview config.\" ;; esac ;;\nesac\ncase \"$c\" in *\"python app.py\"*|*\"python3 app.py\"*|\"./run.sh\"*|*\"&& ./run.sh\"*|*\"; ./run.sh\"*|*\"sh run.sh\"*)\n  case \"$c\" in\n    *PORT=8765*) say deny \"Port 8765 is the owner's INSTALLED packaged app (CLAUDE.md). Use PORT=8799 for a source run.\" ;;\n    *PORT=*) ;;\n    *) say deny \"app.py defaults to port 8765, which is the owner's INSTALLED app (CLAUDE.md). Pass PORT=8799 explicitly.\" ;;\n  esac ;;\nesac\nexit 0",
+            "timeout": 15,
+            "statusMessage": "project guards"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_response.filePath // .tool_input.file_path // empty' | { read -r f; [ -n \"$f\" ] || exit 0; case \"$f\" in /Users/fynnj/Documents/Claude/Projects/ServiceVisualsCreations/*.py) ;; *) exit 0 ;; esac; out=$(/Users/fynnj/Documents/Claude/Projects/ServiceVisualsCreations/.venv/bin/python -m pyflakes \"$f\" 2>&1) || jq -n --arg o \"$out\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"pyflakes on the file just edited:\\n\" + $o + \"\\nAn undefined name here usually means an edit landed in the wrong function. Fix before continuing.\")}}'; }",
+            "command": "f=$(jq -r '.tool_response.filePath // .tool_input.file_path // empty'); case \"$f\" in *.py) ;; *) exit 0 ;; esac; root=$(cd \"$(dirname \"$f\")\" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null); py=\"$root/.venv/bin/python\"; [ -x \"$py\" ] || exit 0; out=$(\"$py\" -m pyflakes \"$f\" 2>&1) || jq -n --arg o \"$out\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"pyflakes on the file just edited:\\n\" + $o + \"\\nAn undefined name here usually means an edit landed in the wrong function. Fix before continuing.\")}}'",
             "timeout": 20,
             "statusMessage": "pyflakes"
+          },
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_response.filePath // .tool_input.file_path // empty')\ncase \"$f\" in\n  */render/timer.py) m=\"Countdown output is byte-identical-guarded (CLAUDE.md). Before this ships: git archive HEAD's render/ into a temp package, render 6s classic/ring/bar old vs new, extract frames and cmp them -- then SERVICE_VISUALS_STATS=0 .venv/bin/python scripts/golden.py --check.\" ;;\n  */render/*.py) m=\"A renderer changed. SERVICE_VISUALS_STATS=0 .venv/bin/python scripts/golden.py --check must pass before this ships (CLAUDE.md).\" ;;\n  *) exit 0 ;;\nesac\njq -n --arg m \"$m\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:$m}}'",
+            "timeout": 10,
+            "statusMessage": "renderer guard"
           }
         ]
       }
