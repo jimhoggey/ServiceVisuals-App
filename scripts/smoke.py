@@ -591,6 +591,7 @@ def check_clock_validation():
     explicitly).
     """
     import validation
+    from backgrounds import BACKGROUNDS_PER_TIMER_MAX
 
     print("Timer: clock validate_timer_options")
 
@@ -690,9 +691,14 @@ def check_clock_validation():
     expect_error("an unknown background id is rejected",
                  dict(countdown, backgrounds=["deadbeefdeadbeef"]),
                  "One of the background images is missing")
-    expect_error("more than 10 background images is rejected",
-                 dict(countdown, backgrounds=["a" * 16] * 11),
-                 "up to 10 background images")
+    # The per-timer cap is the library's own size now (backgrounds.py):
+    # one timer may use everything saved. Asserted against the constant so
+    # this test cannot drift from the number the app enforces.
+    expect_error("more than a library's worth of backgrounds is rejected",
+                 dict(countdown,
+                      backgrounds=["a" * 16] * (BACKGROUNDS_PER_TIMER_MAX + 1)),
+                 "up to {0} background images".format(
+                     BACKGROUNDS_PER_TIMER_MAX))
     expect_error("bg_dim above 80 is rejected",
                  dict(countdown, bg_dim=90),
                  "Dim must be a whole number between 0 and 80.")

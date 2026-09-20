@@ -29,6 +29,13 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.38.0": [
+        "Background: drag images straight onto the timer, or pick several "
+        "at once.",
+        "Your saved images moved into a SAVED IMAGES drop-down, so the "
+        "panel stays short.",
+        "A timer can use 40 background images now, instead of 10.",
+    ],
     "1.37.0": [
         "Background: IMAGES turns gold the moment you click it, so you can "
         "see it's on.",

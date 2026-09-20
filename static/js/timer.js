@@ -22,6 +22,13 @@
   // time the picker opens (see openTimerBgPicker) and otherwise kept in sync
   // in-place as images are added/deleted through this same panel.
   var timerBg = { ids: [], library: null };
+  // Mirrors BACKGROUNDS_PER_TIMER_MAX in backgrounds.py, which is the
+  // library's own size: a timer may use everything saved, and nothing
+  // caps it below that. The cost is real but bounded — every image
+  // becomes a full 1920x1080 plate held for the whole render, ~8 MB each
+  // (measured: 40 images = +334 MB) — so this is not a free number to
+  // raise on either side.
+  var BG_PER_TIMER_MAX = 40;
 
   // IMAGES is a toggle like GREEN SCREEN and TRANSPARENT (owner decision,
   // docs/user-flows.md): pressed means images really are the background.
@@ -160,12 +167,12 @@
       strip.appendChild(li);
     });
     // "+" adds another image. + ADD IMAGE now switches images on and off,
-    // so it can no longer be the way to add a second one. The 10-image
+    // so it can no longer be the way to add a second one. The image
     // cap disables THIS, never + ADD IMAGE: that is the only way left to
     // switch images off, and disabling it would trap an operator with
     // images they could not turn off.
     if (timerBg.ids.length >= 1) {
-      var atCap = timerBg.ids.length >= 10;
+      var atCap = timerBg.ids.length >= BG_PER_TIMER_MAX;
       var addLi = document.createElement("li");
       addLi.className = "bg-thumb bg-thumb-add";
       var addBtn = document.createElement("button");
@@ -175,19 +182,29 @@
       // and volunteers reached for the IMAGES switch instead.
       addBtn.textContent = "+ ADD IMAGE";
       addBtn.disabled = atCap;
-      addBtn.title = atCap ? "A timer can use up to 10 background images."
-                           : "Add another image";
+      addBtn.title = atCap ? "A timer can use up to " + BG_PER_TIMER_MAX +
+                             " background images."
+                           : "Add another image, or drag images onto this row";
       addBtn.setAttribute("aria-label", addBtn.title);
       addBtn.addEventListener("click", openTimerBgPicker);
       addLi.appendChild(addBtn);
       strip.appendChild(addLi);
+    } else {
+      // Nothing chosen yet: say that images can be dropped, at the one
+      // moment the operator is looking for a way to add them. A plain
+      // tile, not a button — the picker below is already open in this
+      // state, so a second thing to click would just be noise.
+      var hintLi = document.createElement("li");
+      hintLi.className = "bg-thumb bg-thumb-hint";
+      hintLi.textContent = "Drop images here";
+      strip.appendChild(hintLi);
     }
     // #timer-bg-empty is decided in applyTimerBg() alone, which every
     // caller runs straight after this -- it used to be set in both.
   }
 
   function addTimerBg(id) {
-    if (timerBg.ids.length >= 10) return;
+    if (timerBg.ids.length >= BG_PER_TIMER_MAX) return;
     if (timerBg.ids.indexOf(id) !== -1) return;   // already in this set
     timerBg.ids.push(id);
     renderTimerBgStrip();
@@ -237,7 +254,15 @@
     while (list.firstChild) list.removeChild(list.firstChild);
     var images = (timerBg.library || []);
     images.forEach(function (entry) { list.appendChild(bgLibRow(entry)); });
-    $("timer-bg-lib-empty").hidden = images.length > 0;
+    // A drop-down that stays shut: what matters is today's images, so the
+    // count answers "is anything in there?" without opening it, and an
+    // empty library shows nothing at all rather than a fold-out saying so.
+    var lib = $("timer-bg-lib");
+    lib.hidden = images.length === 0;
+    if (images.length === 0) lib.open = false;
+    $("timer-bg-lib-summary").textContent = images.length
+      ? "SAVED IMAGES (" + images.length + ")"
+      : "SAVED IMAGES";
   }
 
   function refreshTimerBgLibrary() {
@@ -266,33 +291,196 @@
     $("timer-bg-picker").hidden = true;
   }
 
-  function uploadTimerBg(file) {
-    $("timer-bg-upload-status").textContent = "Uploading…";
+  // One status line sits inside the picker, one under the thumbnail row.
+  // An upload can start from either, and a drop usually lands while the
+  // picker is shut, so both carry the same words and whichever is on
+  // screen is the one the operator reads.
+  function setTimerBgStatus(text) {
+    $("timer-bg-upload-status").textContent = text;
+    var line = $("timer-bg-drop-status");
+    line.textContent = text;
+    line.hidden = !text;
+  }
+
+  // An image that lands IS the background now, however it arrived. Doing
+  // this only once one has actually landed avoids the "on with nothing in
+  // it" state applyTimerBg() backs out of: during a drop the ids list is
+  // still empty and the picker is shut, which is exactly that state.
+  function imagesBecomeBackground() {
+    $("timer-bg-images").setAttribute("aria-pressed", "true");
+    $("timer-bg-green").setAttribute("aria-pressed", "false");
+    $("timer-bg-transparent").setAttribute("aria-pressed", "false");
+  }
+
+  function uploadOneTimerBg(file) {
     var fd = new FormData();
     fd.append("image", file);
-    fetch("/api/backgrounds", { method: "POST", body: fd })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
-      .then(function (res) {
-        $("timer-bg-upload").value = "";
-        if (!res.ok || !(res.j && res.j.id)) {
-          $("timer-bg-upload-status").textContent = "";
-          showError("timer", (res.j && res.j.error) || "Could not use that image.");
-          return;
-        }
-        hideError("timer");
-        $("timer-bg-upload-status").textContent = "";
-        var id = res.j.id;
-        timerBg.library = [{ id: id, added: Date.now() / 1000 }]
-          .concat(timerBg.library || []);
-        renderTimerBgLib();
-        // The natural read of "upload a new one": use it on this timer now.
-        addTimerBg(id);
+    return fetch("/api/backgrounds", { method: "POST", body: fd })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok || !j.id) {
+            return { error: (j && j.error) || "Could not use that image." };
+          }
+          return { id: j.id };
+        });
       })
       .catch(function () {
-        $("timer-bg-upload").value = "";
-        $("timer-bg-upload-status").textContent = "";
-        showError("timer", "Could not upload the image — is the server running?");
+        return { error: "Could not upload the image — is the server running?" };
       });
+  }
+
+  // POST /api/backgrounds takes one image per request, so a multi-file
+  // pick or drop walks them in order rather than firing ten at once: the
+  // server cover-fits every image to 1920x1080 as it arrives, and in
+  // parallel the operator would get no idea how far through it was.
+  function uploadTimerBgFiles(files) {
+    var images = [];
+    var notImages = 0;
+    var i;
+    for (i = 0; i < files.length; i += 1) {
+      // A drop carries whatever was dragged — a folder, a PDF, anything.
+      // The file dialog is filtered by accept=, a drop is not.
+      if (files[i].type && files[i].type.indexOf("image/") === 0) {
+        images.push(files[i]);
+      } else {
+        notImages += 1;
+      }
+    }
+    // Stop at the cap rather than uploading images that could not be used:
+    // storing them anyway would fill the library toward its own limit with
+    // pictures the operator never sees on this timer.
+    var room = BG_PER_TIMER_MAX - timerBg.ids.length;
+    var overflow = 0;
+    if (images.length > room) {
+      overflow = images.length - room;
+      images = images.slice(0, Math.max(room, 0));
+    }
+
+    if (images.length === 0) {
+      $("timer-bg-upload").value = "";
+      setTimerBgStatus("");
+      if (overflow > 0) {
+        showError("timer", "This timer already has " + BG_PER_TIMER_MAX +
+          " background images — remove one before adding more.");
+      } else if (notImages > 0) {
+        showError("timer", notImages === 1
+          ? "That file is not an image we can read (use PNG or JPG)."
+          : "Those files are not images we can read (use PNG or JPG).");
+      }
+      return;
+    }
+
+    var total = images.length;
+    var added = 0;
+    var failure = "";
+    var chain = Promise.resolve();
+    images.forEach(function (file, idx) {
+      chain = chain.then(function () {
+        setTimerBgStatus(total > 1
+          ? "Uploading " + (idx + 1) + " of " + total + "…"
+          : "Uploading…");
+        return uploadOneTimerBg(file).then(function (res) {
+          if (!res.id) {
+            if (!failure) failure = res.error;
+            return;
+          }
+          added += 1;
+          timerBg.library = [{ id: res.id, added: Date.now() / 1000 }]
+            .concat(timerBg.library || []);
+          renderTimerBgLib();
+          // The natural read of "upload a new one": use it on this timer
+          // now. Adding each as it lands also means a long drop shows its
+          // progress as thumbnails appearing, not just a counter.
+          imagesBecomeBackground();
+          addTimerBg(res.id);
+        });
+      });
+    });
+
+    chain.then(function () {
+      $("timer-bg-upload").value = "";
+      var problems = [];
+      if (failure) problems.push(failure);
+      if (notImages > 0) {
+        problems.push(notImages === 1
+          ? "One file was not an image, so it was skipped."
+          : notImages + " files were not images, so they were skipped.");
+      }
+      if (overflow > 0) {
+        problems.push("A timer can use up to " + BG_PER_TIMER_MAX +
+          " background images, so " +
+          (overflow === 1 ? "one more was" : overflow + " more were") +
+          " not added.");
+      }
+      if (problems.length) showError("timer", problems.join(" "));
+      else hideError("timer");
+
+      if (added > 1) {
+        // Cleared shortly after, so it cannot sit there describing
+        // something that stopped being true the moment anything else
+        // changed (docs/user-flows.md, rule 7).
+        var msg = "Added " + added + " images.";
+        setTimerBgStatus(msg);
+        setTimeout(function () {
+          if ($("timer-bg-drop-status").textContent === msg) {
+            setTimerBgStatus("");
+          }
+        }, 4000);
+      } else {
+        setTimerBgStatus("");
+      }
+    });
+  }
+
+  // Drag and drop onto the background block (owner request): dropping a
+  // handful of images straight in is what most people reach for, and it
+  // skips the picker entirely. The zone is the whole block rather than the
+  // <ul> alone — with no images yet that list is empty and a few pixels
+  // tall, which is impossible to aim at — and it stays droppable while
+  // GREEN SCREEN or TRANSPARENT is on, where dropping images reads as
+  // "actually, use these instead".
+  function wireTimerBgDrop() {
+    var zone = $("timer-bg-drop");
+    var depth = 0;      // dragenter/dragleave fire for every child too
+
+    function draggingFiles(e) {
+      var types = e.dataTransfer && e.dataTransfer.types;
+      if (!types) return false;
+      var i;
+      for (i = 0; i < types.length; i += 1) {
+        // DOMStringList in some engines, so no indexOf().
+        if (types[i] === "Files") return true;
+      }
+      return false;
+    }
+
+    zone.addEventListener("dragenter", function (e) {
+      if (!draggingFiles(e)) return;
+      e.preventDefault();
+      depth += 1;
+      zone.classList.add("is-drop-target");
+    });
+    zone.addEventListener("dragover", function (e) {
+      if (!draggingFiles(e)) return;
+      // Without preventDefault on dragover the browser refuses the drop.
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+    zone.addEventListener("dragleave", function () {
+      depth -= 1;
+      if (depth <= 0) {
+        depth = 0;
+        zone.classList.remove("is-drop-target");
+      }
+    });
+    zone.addEventListener("drop", function (e) {
+      if (!draggingFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      zone.classList.remove("is-drop-target");
+      var files = e.dataTransfer.files;
+      if (files && files.length) uploadTimerBgFiles(files);
+    });
   }
 
   function deleteTimerBgLib(id) {
@@ -515,8 +703,9 @@
     // stored-but-switched-off ones are never sent (rule 4 in
     // docs/user-flows.md -- nothing hidden may block the operator).
     if (!bgImagesOn()) return null;
-    if (timerBg.ids.length > 10) {
-      return "A timer can use up to 10 background images.";
+    if (timerBg.ids.length > BG_PER_TIMER_MAX) {
+      return "A timer can use up to " + BG_PER_TIMER_MAX +
+             " background images.";
     }
     if (timerBg.ids.length >= 2) {
       var secs = intFrom($("timer-bg-seconds"));
@@ -1314,9 +1503,15 @@
     updateTimer();    // closing with nothing picked backs images out
   });
   $("timer-bg-upload").addEventListener("change", function () {
-    var file = this.files && this.files[0];
-    if (file) uploadTimerBg(file);
+    // multiple= on the input: picking images one at a time in Windows
+    // Explorer was the slowest part of setting a timer up.
+    if (this.files && this.files.length) uploadTimerBgFiles(this.files);
   });
+  wireTimerBgDrop();
+  // Draw the strip once at boot. It is otherwise only drawn when an image
+  // is added or removed, so on a fresh load the empty state had no "Drop
+  // images here" tile in it — the one moment it is most needed.
+  renderTimerBgStrip();
   // Green screen (spec: docs/specs/green-screen.md): a plain button click
   // fires no form input/change event, unlike every other timer-bg-*
   // control above (all real form fields), so this calls updateTimer()

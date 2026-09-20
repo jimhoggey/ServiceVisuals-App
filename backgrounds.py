@@ -27,7 +27,18 @@ BACKGROUNDS_DIR = os.path.join(
 # filesystem, same discipline as BOARD_ID_RE.
 BACKGROUND_ID_RE = re.compile(r"[a-f0-9]{16}")
 BACKGROUND_LIBRARY_MAX = 40
-BACKGROUNDS_PER_TIMER_MAX = 10
+
+# One timer may use everything in the library — there is no extra limit on
+# top of it. It used to be 10, which arrived with the feature (v1.24.0)
+# and was never justified anywhere; the owner asked for it gone unless it
+# earned its place. What it costs, measured: render/timer.py builds every
+# background into a full 1920x1080 plate and holds ALL of them for the
+# whole render, about 8 MB each — 1 image +24 MB, 10 +96 MB, 20 +175 MB,
+# 40 +334 MB of resident memory on top of a ~34 MB baseline. So the real
+# ceiling is worth keeping, and the library's own 40 is it. Raising THAT
+# means making the plates lazy first (render/timer.py _plates), not just
+# changing this number.
+BACKGROUNDS_PER_TIMER_MAX = BACKGROUND_LIBRARY_MAX
 
 
 def _send_png(path):

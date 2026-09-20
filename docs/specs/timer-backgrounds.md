@@ -90,10 +90,15 @@ Four optional keys, valid in **both** modes:
 }}
 ```
 
-- `backgrounds`: list, 0–10 items, each matching `^[a-f0-9]{16}$`. Default
+- `backgrounds`: list, 0–40 items (`BACKGROUNDS_PER_TIMER_MAX`, which is
+  the library's own size — a timer may use everything saved), each
+  matching `^[a-f0-9]{16}$`. Default
   `[]`. Unknown id → *"One of the background images is missing — remove it
-  and add it again."* More than 10 → *"A timer can use up to 10 background
-  images."*
+  and add it again."* More than 40 → *"A timer can use up to 40 background
+  images."* (v1.38.0: was 10, an unexplained number from v1.24.0. Every
+  image becomes a full 1920x1080 plate held for the whole render, ~8 MB
+  each — measured +96 MB at 10, +334 MB at 40 — so the library cap is the
+  real ceiling; raising THAT needs lazy plates first.)
 - `bg_seconds`: `_int_field` 2–120, default 10, label `Seconds per image`.
 - `bg_dim`: `_int_field` 0–80, default 45, label `Dim`.
 - `bg_blur`: bool, default false → *"Blur must be true or false."*

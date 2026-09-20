@@ -306,7 +306,7 @@
           <fieldset class="group" id="timer-bg-group">
             <legend>Background</legend>
 
-            <div class="bg-strip-wrap">
+            <div class="bg-strip-wrap" id="timer-bg-drop">
               <p class="hint bg-strip-empty" id="timer-bg-empty">No images &#8212; plain dark background.</p>
               <!-- The three background choices get a row of their own. They
                    used to share one wrapping row with the caption and the
@@ -320,7 +320,12 @@
                      with it (see the click handlers in timer.js). -->
                 <button type="button" class="btn btn-file" id="timer-bg-transparent" aria-pressed="false"><span class="btn-alpha-dot" aria-hidden="true"></span>TRANSPARENT</button>
               </div>
+              <!-- The thumbnail row is also the drop target: dragging a
+                   handful of images straight onto it is how most people
+                   expect to add them, and it saves the picker round trip
+                   entirely. Wiring is in timer.js (wireTimerBgDrop). -->
               <ul class="bg-strip" id="timer-bg-strip"></ul>
+              <p class="hint bg-drop-status" id="timer-bg-drop-status" hidden></p>
             </div>
 
             <!-- Coordinator-directed addition (round 2 of the copy
@@ -384,12 +389,23 @@
 
             <div class="panel bg-picker" id="timer-bg-picker" hidden>
               <div class="bg-row">
-                <label class="btn btn-file" for="timer-bg-upload">UPLOAD NEW&#8230;</label>
-                <input class="vh" type="file" id="timer-bg-upload" accept="image/png,image/jpeg,image/webp">
+                <label class="btn btn-file" for="timer-bg-upload">UPLOAD IMAGES&#8230;</label>
+                <!-- multiple: picking images one at a time in Windows
+                     Explorer was the slowest part of setting up a timer. -->
+                <input class="vh" type="file" id="timer-bg-upload" accept="image/png,image/jpeg,image/webp" multiple>
                 <span class="bg-name" id="timer-bg-upload-status"></span>
               </div>
-              <ul class="bg-lib-list" id="timer-bg-lib-list"></ul>
-              <p class="hint" id="timer-bg-lib-empty" hidden>No stored images yet &#8212; upload one above.</p>
+              <!-- Everything uploaded before, folded away (owner: "I don't
+                   really care about the images I had previously"). Setting
+                   up this Sunday's timer means dropping or uploading
+                   today's images; reusing last month's is the rarer job,
+                   so it opens on request and stays shut otherwise, and
+                   does not appear at all until something is saved. -->
+              <details class="bg-lib" id="timer-bg-lib" hidden>
+                <summary class="bg-lib-summary" id="timer-bg-lib-summary">SAVED IMAGES</summary>
+                <p class="hint bg-lib-note">Click one to use it on this timer. &#215; deletes it from storage for good.</p>
+                <ul class="bg-lib-list" id="timer-bg-lib-list"></ul>
+              </details>
               <div class="bg-picker-foot">
                 <button type="button" class="btn" id="timer-bg-picker-close">DONE</button>
               </div>

@@ -232,6 +232,14 @@
   });
   $("version-btn").addEventListener("click", function () { checkForUpdate(true, true); });
 
+  // A file dropped anywhere the page does not handle would otherwise
+  // REPLACE the app with that file — the webview navigates to it, and
+  // there is no back button in the packaged window. The timer's
+  // background block is the one real drop target (timer.js); every near
+  // miss around it has to land on nothing instead.
+  window.addEventListener("dragover", function (e) { e.preventDefault(); });
+  window.addEventListener("drop", function (e) { e.preventDefault(); });
+
   // boot
   refreshHealth();
   setInterval(refreshHealth, 10000);

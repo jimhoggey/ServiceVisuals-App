@@ -1065,6 +1065,39 @@ canvas {
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* Empty state: the row is the drop target, so with nothing in it there
+   has to be something to aim at and something that says so. */
+.bg-thumb-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  border: 1px dashed var(--line, #3a3d44);
+  border-radius: 6px;
+  color: var(--ink-dim);
+}
+
+/* Dragging files over the background block. The whole block highlights,
+   not just the thumbnail row: with no images the row is a few pixels
+   tall, and a target you cannot hit is worse than no target. */
+.bg-strip-wrap.is-drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: 6px;
+  border-radius: 6px;
+}
+.bg-strip-wrap.is-drop-target .bg-thumb-hint {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.bg-drop-status {
+  margin: 0;
+}
+
 .bg-thumb img {
   display: block;
   width: 100%;
@@ -1176,6 +1209,31 @@ canvas {
   background: var(--panel-2);
 }
 .bg-picker .bg-row { margin-bottom: 14px; }
+
+/* The saved library folds away: today's images are the job, last month's
+   are the exception (owner). Closed it is one quiet line with a count. */
+.bg-lib {
+  border-top: 1px solid var(--line-2);
+  padding-top: 10px;
+}
+.bg-lib-summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  list-style: none;
+}
+.bg-lib-summary::-webkit-details-marker { display: none; }
+.bg-lib-summary::before {
+  content: "\25B8";           /* right-pointing triangle, rotates when open */
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.12s ease;
+}
+.bg-lib[open] > .bg-lib-summary::before { transform: rotate(90deg); }
+.bg-lib-summary:hover { color: var(--accent); }
+.bg-lib-note { margin: 8px 0; }
 
 .bg-lib-list {
   display: flex;
