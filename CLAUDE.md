@@ -42,16 +42,20 @@ Owner: Fynn (GitHub `jimhoggey`). Repo: **jimhoggey/ServiceVisuals-App** (public
   the owner reports a confusion, add it under "Found, not yet fixed" before
   fixing it, so nothing is lost between sessions. graphify indexes it, so a
   query about a control surfaces its flow as well as its code.
-- **`ux-flow-reviewer` is for user-flow DECISIONS, not a gate on every
-  change** (`.claude/agents/ux-flow-reviewer.md`). Reach for it when the
-  question is what a volunteer will believe — a control whose meaning is
-  in doubt, a layout the owner has already been confused by, a screen
-  nobody has walked. Do not run a half-hour full-coverage pass before
-  every release: the owner stopped one mid-flight for exactly that, and a
-  review that delays a ready feature is costing more than it finds. Scope
-  it to the journeys actually in question, and say what you skipped.
-  Verify the rest yourself in the browser, which is faster and usually
-  enough.
+- **Every change to `static/*` goes through the `ux-flow-reviewer` agent
+  before it ships** (`.claude/agents/ux-flow-reviewer.md`). Browser state
+  checks only prove the code matches the implementer's own rule; they kept
+  passing UI that confused the owner, because the rule itself was wrong
+  from the operator's side. The reviewer walks real journeys — empty state,
+  click twice, switch back, narrow window (1024/900/768) — and screenshots
+  each step.
+- **Scope that review to the change in hand.** It confirms the flows
+  THIS update touches still work: the controls in the diff, the states
+  they can be left in, and the journeys that pass through them. Not a
+  sweep of every screen in the app — that is a separate job, and only
+  when the owner asks for it by name. A full-coverage pass launched by
+  reflex held up a finished release and was killed for it. Tell the
+  reviewer exactly what changed and which journeys that reaches.
 
 ## Running it
 
