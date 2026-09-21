@@ -29,6 +29,12 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.40.0": [
+        "Timer: ADVANCED now shows how your last export was made, and how "
+        "long it took.",
+        "On Windows it says whether your graphics card did the encoding — "
+        "the biggest factor in speed.",
+    ],
     "1.39.0": [
         "Fixed on Windows: the downloader could never install, so no "
         "YouTube download worked.",

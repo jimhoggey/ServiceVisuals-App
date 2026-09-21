@@ -291,6 +291,115 @@ def check_whats_new():
     reset()
 
 
+def check_encoder_report():
+    """Which encoder an export actually used, why a graphics card was
+    skipped, and that only our own words ever reach analytics.
+
+    On Windows the encoder is almost the whole render time (drawing a
+    5-minute countdown takes 0.2s of 6.2s), and the probe used to throw
+    ffmpeg's refusal away — so a real NVIDIA machine falling back to
+    software looked exactly like one with no GPU at all.
+    """
+    from render import encoder
+    import app as _app_enc
+
+    print("Encoder: what ran, why not the GPU, and what analytics sees")
+    saved_notes = list(encoder._probe_notes)
+    saved_last = encoder.last_codec()
+    try:
+        # Nothing ran yet: nothing to report, nothing to send.
+        encoder.reset_last_codec()
+        del encoder._probe_notes[:]
+        check("no encoder ran -> report names none",
+              encoder.encoder_report()["codec"] is None)
+        check("no encoder ran -> analytics gets no encoder props",
+              _app_enc._encoder_props() == {})
+
+        # A real FrameEncoder records the codec it ACTUALLY used.
+        import tempfile as _tf
+        out = os.path.join(_tf.mkdtemp(), "probe.mp4")
+        from PIL import Image as _Img
+        with encoder.FrameEncoder(out, 30) as enc:
+            enc.add_frame(_Img.new("RGB", (encoder.WIDTH, encoder.HEIGHT)))
+        check("a real encode records the codec it used",
+              encoder.last_codec() == encoder.pick_codec(),
+              "got {0!r}".format(encoder.last_codec()))
+        os.unlink(out)
+        encoder.reset_last_codec()
+        check("reset forgets it, so a PNG job cannot inherit it",
+              encoder.last_codec() is None)
+        # That encode may have been this run's FIRST, in which case it
+        # probed the graphics-card encoders just now — and on the Windows
+        # CI runner (no GPU) all three refuse and leave notes. Clear them,
+        # or the "Mac" assertions below pass here and fail there: the same
+        # host assumption that turned the v1.39.0 Windows build red.
+        del encoder._probe_notes[:]
+
+        # A Mac: libx264 by design, nothing tried -> no GPU claim at all.
+        encoder._record_codec("libx264")
+        rep = encoder.encoder_report()
+        check("software with nothing refused makes no GPU claim",
+              rep["notes"] == [] and rep["refused"] == {})
+        check("analytics gets just the codec",
+              _app_enc._encoder_props() == {"encoder": "libx264"},
+              "got {0!r}".format(_app_enc._encoder_props()))
+
+        # Windows fallback. The reason carries a user's path on purpose:
+        # it must stay local, and only a fixed word may leave.
+        encoder._note_probe("h264_nvenc", "noise\nCannot load "
+                            "C:\\Users\\Pastor Dave\\nvEncodeAPI64.dll")
+        encoder._note_probe("h264_qsv", "No capable devices found")
+        encoder._note_probe("h264_amf", "Encoder not found")
+        rep = encoder.encoder_report()
+        check("a fallback keeps ffmpeg's reasons locally, for the UI",
+              any("nvEncodeAPI64.dll" in n for n in rep["notes"]))
+        check("each refusal becomes one of our own words",
+              rep["refused"] == {"nvenc": "no_driver", "qsv": "no_device",
+                                 "amf": "unsupported"},
+              "got {0!r}".format(rep["refused"]))
+        props = _app_enc._encoder_props()
+        flat = " ".join("{0}={1}".format(k, v) for k, v in props.items())
+        check("analytics names the codec and the three refusals",
+              props == {"encoder": "libx264", "nvenc": "no_driver",
+                        "qsv": "no_device", "amf": "unsupported"},
+              "got {0!r}".format(props))
+        check("PRIVACY: no ffmpeg text, path or name reaches analytics",
+              "Users" not in flat and "Dave" not in flat
+              and ".dll" not in flat and "\\" not in flat,
+              "got {0!r}".format(flat))
+
+        # A codec we have never heard of still sends only our own word.
+        encoder._record_codec("some_future_codec")
+        check("an unknown codec is sent as 'other', never verbatim",
+              _app_enc._encoder_props().get("encoder") == "other")
+
+        # The reason line itself: last line kept, runaway text capped.
+        del encoder._probe_notes[:]
+        encoder._note_probe("h264_qsv", "x" * 500)
+        check("a runaway reason is capped",
+              len(encoder._probe_notes[-1][1]) <= 160)
+        encoder._note_probe("h264_amf", "")
+        check("an empty reason still records the codec",
+              encoder._probe_notes[-1][0] == "h264_amf")
+
+        # A probe that genuinely fails must record WHY, not just say no.
+        real_flags = dict(encoder._CODEC_FLAGS)
+        try:
+            encoder._CODEC_FLAGS["libx264"] = ["-preset", "not-a-preset"]
+            before = len(encoder._probe_notes)
+            ok = encoder._probe_codec("libx264")
+            check("a failing probe returns False and says why",
+                  ok is False and len(encoder._probe_notes) == before + 1,
+                  "ok={0!r}".format(ok))
+        finally:
+            encoder._CODEC_FLAGS.clear()
+            encoder._CODEC_FLAGS.update(real_flags)
+    finally:
+        del encoder._probe_notes[:]
+        encoder._probe_notes.extend(saved_notes)
+        encoder._record_codec(saved_last)
+
+
 def check_prepare_background():
     """render.timer.prepare_background: cover-fit, dim, blur — exercised as
     a pure image function (docs/specs/timer-backgrounds.md), no video
@@ -2251,8 +2360,17 @@ def check_batch_download():
         progress_cb(50)
         return "plain.mp4"
 
+    from render import encoder as _enc
+
+    def fake_video_renderer(_options, progress_cb):
+        # Stands in for a real FrameEncoder: it is what records the codec.
+        _enc._record_codec("libx264")
+        progress_cb(50)
+        return "video.mp4"
+
     job_mgr = JobManager({"fakedict": fake_dict_renderer,
-                          "fakestring": fake_string_renderer})
+                          "fakestring": fake_string_renderer,
+                          "fakevideo": fake_video_renderer})
 
     def _wait_done(job_id, timeout=5):
         deadline = _time.time() + timeout
@@ -2279,11 +2397,36 @@ def check_batch_download():
           "got {0!r}".format(dict_info))
 
     string_info = _wait_done(job_mgr.submit("fakestring", {}))
-    check("a string-returning renderer behaves exactly as today",
+    # encoder/encoder_notes/seconds are JOB fields the worker fills in for
+    # every tile (which encoder ran, and how long) -- so they are always
+    # in the payload, unlike `extra`, which stays strictly "what this
+    # renderer returned". A plain-string renderer must still contribute
+    # no keys of its own.
+    check("a string-returning renderer contributes no keys of its own",
           string_info.get("filename") == "plain.mp4"
           and set(string_info) == {"id", "type", "status", "progress",
-                                   "filename", "error", "queue_position"},
+                                   "filename", "error", "queue_position",
+                                   "encoder", "encoder_notes", "seconds"},
           "got {0!r}".format(string_info))
+    # A job that opened no video encoder (a PNG export, a download) must
+    # report none. The first version stamped pick_codec() on every job —
+    # naming a codec that never ran, and firing the hardware probes (up to
+    # a 20 s timeout each on Windows) that transparent exports exist to
+    # avoid.
+    check("a job that ran no video encoder reports none",
+          string_info.get("encoder") is None
+          and string_info.get("seconds") is None,
+          "got encoder={0!r} seconds={1!r}".format(
+              string_info.get("encoder"), string_info.get("seconds")))
+    video_info = _wait_done(job_mgr.submit("fakevideo", {}))
+    check("a job that ran an encoder reports which one, and how long",
+          video_info.get("encoder") == "libx264"
+          and video_info.get("seconds") is not None,
+          "got {0!r}".format(video_info))
+    after_video = _wait_done(job_mgr.submit("fakestring", {}))
+    check("the next non-video job does not inherit the last codec",
+          after_video.get("encoder") is None,
+          "got {0!r}".format(after_video.get("encoder")))
 
     print()
     print("Download: per-item analytics (export/download_failed per item)")
@@ -3311,6 +3454,8 @@ def main():
             if os.path.isfile(path):
                 os.unlink(path)
 
+    print()
+    check_encoder_report()
     print()
     check_prepare_background()
     print()

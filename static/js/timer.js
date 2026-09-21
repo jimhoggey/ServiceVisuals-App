@@ -1540,9 +1540,45 @@
     updateTimer();
   });
 
+  // Which encoder made the last export, under ADVANCED. On Windows the
+  // encoder is nearly the whole render time (drawing a 5-minute
+  // countdown takes 0.2 s of 6.2 s), so this is how the owner tells a
+  // graphics card that is working from one that is being skipped. Plain
+  // words first; the codec name and ffmpeg's own reason on a dim second
+  // line, for whoever needs to search for it.
+  var HW_ENCODERS = { h264_nvenc: true, h264_qsv: true, h264_amf: true };
+
+  function showEncoderStat(filename, job) {
+    var group = $("timer-encoder-group");
+    if (!job || !job.encoder) {
+      group.hidden = true;
+      return;
+    }
+    var took = (job.seconds || job.seconds === 0)
+      ? job.seconds + " seconds" : "";
+    var notes = job.encoder_notes || [];
+    var line;
+    if (HW_ENCODERS[job.encoder]) {
+      line = "Made on the graphics card" + (took ? ", in " + took : "") + ".";
+    } else if (notes.length) {
+      // Only said when graphics-card encoders were actually tried and
+      // refused — a Mac never tries them, by design, so it gets no such
+      // claim.
+      line = "Made without the graphics card" +
+        (took ? ", in " + took : "") +
+        " — its encoder was not available on this computer.";
+    } else {
+      line = took ? "Took " + took + "." : "";
+    }
+    $("timer-encoder-stat").textContent = line;
+    $("timer-encoder-tech").textContent = job.encoder +
+      (notes.length ? " · " + notes.join("; ") : "");
+    group.hidden = false;
+  }
+
   var timerTile = {
     update: updateTimer, validate: validateTimer, payload: timerPayload,
-    enter: updateTimer, leave: function () {}
+    enter: updateTimer, leave: function () {}, done: showEncoderStat
   };
   SV.wireTileForm("timer", timerTile, { autoUpdate: true });
   SV.registerTile("timer", timerTile);

@@ -66,6 +66,13 @@ EVENTS = (
     # sends ONE of these per saved link, so a 20-song batch is 20 ordinary
     # exports rather than one 3-minute "render" (batch-download.md).
     # Never the url, title or filename (youtube-download.md).
+    # Any export that ran a video encoder adds encoder (libx264|h264_nvenc|
+    # h264_qsv|h264_amf|qtrle|prores_ks) — which answers "is this machine
+    # using its graphics card?" across the fleet. When a Windows machine
+    # tried the graphics-card encoders and fell back to software, it also
+    # adds nvenc / qsv / amf, each one of no_driver|no_device|unsupported|
+    # timeout|other. ffmpeg's own refusal text is NEVER sent: it can name
+    # a DLL by full path, and a Windows path carries the user's name.
     "export",           # a visual was exported
     # props: reason (one of downloader.ERROR_REASONS — our own words:
     # setup|bot_check|private|age|unavailable|network|unknown), ytdlp and

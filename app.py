@@ -27,6 +27,7 @@ import whatsnew
 import tools
 from downloader import ERROR_REASONS, JOB_TIMEOUT, download_video
 from jobs import JobManager
+from render import encoder as render_encoder
 from render.encoder import EXPORTS_DIR, UPLOADS_DIR
 from render.timer import render_timer
 from render.spinner import render_spinner
@@ -113,12 +114,40 @@ def track_export(tool, started, **props):
                 took=_took_bucket(ms), **props)
 
 
+def _encoder_props():
+    """Which encoder did this export use, and — when a Windows machine
+    fell back to software — why each graphics-card encoder said no.
+
+    The owner's question was "who is using the GPU and who isn't", and
+    only analytics can answer it across machines. Every value is one of
+    our own words: the codec from render.encoder.KNOWN_ENCODERS, and the
+    refusal reduced to no_driver/no_device/unsupported/timeout/other.
+    ffmpeg's own text NEVER goes: it can name a DLL by full path, and a
+    Windows path carries the user's name (stats.py's privacy rule).
+    Nothing at all for a PNG export, which runs no video encoder.
+    """
+    try:
+        report = render_encoder.encoder_report()
+    except Exception:
+        return {}
+    if not report.get("codec"):
+        return {}
+    props = {"encoder": _one_of(report["codec"],
+                                render_encoder.KNOWN_ENCODERS, "other")}
+    for name, bucket in (report.get("refused") or {}).items():
+        props[name] = _one_of(bucket, ("no_driver", "no_device",
+                                       "unsupported", "timeout", "other"),
+                              "other")
+    return props
+
+
 def _counted(tool, fn, extra_props=None):
     """Count an export once it has actually produced a file."""
     def run(options, progress_cb):
         started = time.time()
         filename = fn(options, progress_cb)
         props = extra_props(options) if extra_props else {}
+        props.update(_encoder_props())
         track_export(tool, started, **props)
         return filename
     return run

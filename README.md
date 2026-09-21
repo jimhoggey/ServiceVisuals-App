@@ -47,9 +47,11 @@ first — the full details stay on your computer in
 sent, there is no user or device ID, and it can't be traced back to a person
 or a church. It goes to [Aptabase](https://aptabase.com/) (open source,
 privacy-first). Turn it off any time with the **ANONYMOUS USAGE COUNTS**
-switch in the footer. Exports also record how long the render took and
-which visual it was (a style name, never a file name). The full list of
-events lives in [`stats.py`](stats.py).
+switch in the footer. Exports also record how long the render took, which
+visual it was (a style name, never a file name), and which video encoder did
+the work — whether your graphics card was used and, if it wasn't, a one-word
+reason such as a missing driver (never the error text itself, which can
+contain a file path). The full list of events lives in [`stats.py`](stats.py).
 
 ## Using it
 

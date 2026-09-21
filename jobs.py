@@ -7,7 +7,10 @@ submit jobs and poll status; everything is guarded by one lock.
 
 import queue
 import threading
+import time
 import uuid
+
+from render import encoder
 
 
 class Job:
@@ -24,6 +27,14 @@ class Job:
         # renderer that returns a plain filename string, which is every
         # renderer but that one today.
         self.extra = {}
+        # How the render was produced, filled in by the worker for every
+        # tile rather than by each renderer. Job fields, deliberately NOT
+        # `extra`: that dict means "what this renderer returned", and
+        # putting these in it made a plain-string renderer look like a
+        # dict-returning one.
+        self.encoder = None
+        self.encoder_notes = []
+        self.seconds = None
 
     def to_dict(self, queue_position=0):
         result = dict(self.extra)
@@ -37,6 +48,9 @@ class Job:
             "progress": self.progress,
             "filename": self.filename,
             "error": self.error,
+            "encoder": self.encoder,
+            "encoder_notes": self.encoder_notes,
+            "seconds": self.seconds,
             "queue_position": queue_position,
         })
         return result
@@ -110,7 +124,13 @@ class JobManager:
                     _job.progress = max(0, min(100, int(pct)))
 
             try:
+                # Forget the previous job's codec: a PNG or download job
+                # opens no FrameEncoder, and must not inherit the last
+                # video's answer.
+                encoder.reset_last_codec()
+                started = time.time()
                 output = self._renderers[job.type](job.options, progress_cb)
+                elapsed = time.time() - started
                 with self._lock:
                     if isinstance(output, dict):
                         job.filename = output.get("filename")
@@ -118,6 +138,21 @@ class JobManager:
                                     if k != "filename"}
                     else:
                         job.filename = output
+                    # Which encoder did the work, and how long it took.
+                    # Set here rather than in each renderer so every tile
+                    # reports it: on Windows the answer decides almost
+                    # the whole render time, and until now nothing
+                    # recorded it (see render.encoder.encoder_report).
+                    # Only when a video encoder actually ran — a PNG or a
+                    # download leaves all three at None.
+                    try:
+                        report = encoder.encoder_report()
+                        if report["codec"]:
+                            job.encoder = report["codec"]
+                            job.encoder_notes = report["notes"]
+                            job.seconds = round(elapsed, 1)
+                    except Exception:
+                        pass        # never fail a finished render over this
                     job.progress = 100
                     job.status = "done"
             except Exception as exc:  # surface anything to the UI

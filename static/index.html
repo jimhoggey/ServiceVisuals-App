@@ -504,6 +504,17 @@
               </div>
               <p class="hint" id="timer-hold-hint">After the countdown ends the video stays on 0:00 this long. 0 to 30 seconds.</p>
             </fieldset>
+
+            <!-- Which encoder made the last export (owner: "is the GPU
+                 working?"). Here rather than under the finished filename:
+                 "h264_nvenc" means nothing to a volunteer, but the owner
+                 needs it on a real Windows machine. Filled after each
+                 export by timer.js (showEncoderStat). -->
+            <fieldset class="group" id="timer-encoder-group" hidden>
+              <legend>Last export</legend>
+              <p class="hint" id="timer-encoder-stat"></p>
+              <p class="hint hint-tech" id="timer-encoder-tech"></p>
+            </fieldset>
           </details>
 
           <button class="btn-export" id="timer-export" type="submit">EXPORT MP4</button>

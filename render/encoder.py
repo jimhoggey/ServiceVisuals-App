@@ -124,6 +124,70 @@ _CODEC_FLAGS = {
 _picked_codec = None
 
 
+# Why each hardware encoder was turned down, as (codec, reason) in the
+# order they were tried. The probe used to throw this away, so a Windows
+# machine with a real NVIDIA card that fell back to software looked
+# identical to one with no GPU at all — the owner could see only that
+# exports were slow. The raw reason stays on this machine: ffmpeg can name
+# a DLL by its full path, and a Windows path carries the user's name.
+_probe_notes = []
+
+# The codec the most recent FrameEncoder ACTUALLY used. Not pick_codec():
+# a transparent export uses qtrle/ProRes and deliberately never probes
+# (each probe can cost a 20 s timeout on Windows), and a PNG export uses
+# no video encoder at all — asking pick_codec() after those would report
+# a codec that never ran, and trigger the very probes they avoid. Jobs run
+# one at a time on a single worker, which reset_last_codec()s first.
+_last_codec = None
+
+# Every value an analytics prop may take — our own words only, never
+# ffmpeg's text (stats.py's privacy rule).
+KNOWN_ENCODERS = ("libx264", "h264_nvenc", "h264_qsv", "h264_amf",
+                  "qtrle", "prores_ks")
+_HW_SHORT = {"h264_nvenc": "nvenc", "h264_qsv": "qsv", "h264_amf": "amf"}
+
+
+def _note_probe(codec, detail):
+    """Keep one short reason for a refused codec. ffmpeg's last non-empty
+    line is the useful part ("Cannot load nvEncodeAPI64.dll", "No capable
+    devices found"), capped so a runaway message stays readable."""
+    lines = [ln.strip() for ln in (detail or "").splitlines() if ln.strip()]
+    reason = lines[-1] if lines else "no reason given"
+    _probe_notes.append((codec, reason[:160]))
+
+
+def _refusal_bucket(reason):
+    """ffmpeg's refusal reduced to one of our own words, so the reason a
+    GPU went unused can be counted across machines without ever sending
+    the text itself."""
+    low = reason.lower()
+    if "timeout" in low:
+        return "timeout"
+    if "cannot load" in low or ".dll" in low or "nvcuda" in low or \
+            "driver" in low:
+        return "no_driver"
+    if "no capable" in low or "device" in low or "adapter" in low:
+        return "no_device"
+    if "not found" in low or "unknown encoder" in low or \
+            "not supported" in low:
+        return "unsupported"
+    return "other"
+
+
+def reset_last_codec():
+    global _last_codec
+    _last_codec = None
+
+
+def last_codec():
+    return _last_codec
+
+
+def _record_codec(codec):
+    global _last_codec
+    _last_codec = codec
+
+
 def _probe_codec(codec):
     """Can this ffmpeg + this machine actually encode with `codec`?"""
     cmd = [
@@ -136,11 +200,40 @@ def _probe_codec(codec):
         extra = {}
         if sys.platform == "win32":
             extra["creationflags"] = 0x08000000      # CREATE_NO_WINDOW
-        return subprocess.run(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=20, **extra).returncode == 0
-    except Exception:
+        proc = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            timeout=20, **extra)
+        if proc.returncode == 0:
+            return True
+        _note_probe(codec, (proc.stderr or b"").decode("utf-8", "replace"))
         return False
+    except Exception as exc:
+        _note_probe(codec, "{0}: {1}".format(type(exc).__name__, exc))
+        return False
+
+
+def encoder_report():
+    """What the last export actually used, for the UI and for analytics.
+
+    {"codec": None | <codec>, "notes": ["h264_nvenc: <reason>", ...],
+     "refused": {"nvenc": "no_driver", ...}}
+
+    `notes` and `refused` are only filled when the last export fell back
+    to software AFTER hardware encoders were tried and refused — the one
+    case where "why not the GPU?" has an answer. A Mac never tries them
+    (libx264 by design), and a transparent export never uses H.264, so
+    both report the codec alone. `notes` is raw ffmpeg text and stays
+    local; `refused` is the same information in our own words, safe for
+    analytics.
+    """
+    codec = _last_codec
+    fell_back = codec == "libx264" and bool(_probe_notes)
+    notes = ["{0}: {1}".format(c, r) for c, r in _probe_notes] \
+        if fell_back else []
+    refused = {_HW_SHORT[c]: _refusal_bucket(r)
+               for c, r in _probe_notes if c in _HW_SHORT} \
+        if fell_back else {}
+    return {"codec": codec, "notes": notes, "refused": refused}
 
 
 def pick_codec():
@@ -263,6 +356,11 @@ class FrameEncoder:
                           "-pix_fmt", fmt_spec["pix_fmt"]]
             container = fmt_spec["container"]
             movflags = fmt_spec["movflags"]
+
+        # Recorded from the finished argument list rather than inside
+        # either branch, so both stay exactly as they were: codec_args[1]
+        # is the -vcodec value on both paths.
+        _record_codec(codec_args[1])
 
         cmd = [
             imageio_ffmpeg.get_ffmpeg_exe(),
