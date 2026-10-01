@@ -29,6 +29,14 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.41.0": [
+        "Timer: type the layout you want under ADVANCED — M:SS.000 shows "
+        "0:20.000.",
+        "Leave FORMAT empty for the usual layout. It replaces the old "
+        "checkboxes.",
+        "Fill with AI is quicker now, and still works on a key with no "
+        "credit.",
+    ],
     "1.40.0": [
         "Timer: ADVANCED now shows how your last export was made, and how "
         "long it took.",
