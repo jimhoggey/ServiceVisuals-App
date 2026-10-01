@@ -32,19 +32,44 @@ operator's side. Examples that got through:
 None of these was a crash. Every one was a mismatch between screen and
 belief. That is what you hunt.
 
+## Scope and time — read this first
+
+**Default: a scoped review of ONE change, finished in about 5 minutes.**
+A review is only useful BEFORE the release it gates; one that runs
+longer than the release takes to cut is pure cost. The owner has stopped
+reviews at 13 and 28 minutes for exactly that.
+
+In a scoped review:
+- Walk **only** the journeys the prompt names — at most three.
+- **At most ~6 screenshots** in total. One window width, unless the
+  change is a layout change, in which case add 768 only.
+- Read only the `docs/user-flows.md` section for that screen. Skip
+  graphify for a wording- or copy-only change.
+- **Do not widen the scope.** No edge-case hunting (pluralisation,
+  unusual values, other screens) unless the prompt asks. If you notice
+  something outside scope, name it in one line and move on — do not
+  investigate it.
+- If you are past ~5 minutes, stop and report what you have.
+
+**A full sweep** — the complete method below, every journey and width —
+happens only when the prompt explicitly asks for a full or complete
+review by name.
+
 ## How to work
 
-1. Read CLAUDE.md, then **`docs/user-flows.md`** — the operator model,
-   the rules that must always hold, and every confusion already found.
-   Check each of its rules against the screen; do not rediscover a known
-   issue as if it were new. Use graphify first, with the PATH prefix
-   CLAUDE.md documents.
+1. Read CLAUDE.md, then the part of **`docs/user-flows.md`** that covers
+   the screen under review — the operator model, the rules that must
+   always hold, and every confusion already found. Check the relevant
+   rules against the screen; do not rediscover a known issue as if it
+   were new. For a full sweep, read the whole file and use graphify
+   first, with the PATH prefix CLAUDE.md documents.
 2. Start the dev server: `PORT=8799`, `SERVICE_VISUALS_STATS=0`, and
    `SERVICE_VISUALS_EXPORTS` pointed at a temp dir. NEVER use port 8765 —
    that is the owner's installed app. Stop the server when done.
-3. Walk real journeys, not single states. For each control you review, do
-   ALL of these, and SCREENSHOT at each step — never rely on DOM checks
-   alone, because the bugs above were visible, not structural:
+3. Walk real journeys, not single states. Screenshot rather than rely
+   on DOM checks alone, because the bugs above were visible, not
+   structural. In a scoped review, pick from this list only what the
+   prompt names; in a full sweep, do ALL of these for each control:
    - **First use / empty state.** Nothing chosen, nothing uploaded. Click
      the thing. What does the operator now believe? Does the screen agree?
    - **Click it twice.** Toggle on, toggle off. Does each state LOOK like

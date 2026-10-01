@@ -56,6 +56,12 @@ Owner: Fynn (GitHub `jimhoggey`). Repo: **jimhoggey/ServiceVisuals-App** (public
   when the owner asks for it by name. A full-coverage pass launched by
   reflex held up a finished release and was killed for it. Tell the
   reviewer exactly what changed and which journeys that reaches.
+  **Start it as soon as the UI change is made, so it finishes while the
+  gate runs** — a scoped review should take about 5 minutes (the agent
+  file caps it). A second one ran 13 minutes, past the release it was
+  meant to gate, which makes its findings worthless. For a narrow
+  wording check, pass `model: haiku` on the Agent call; it is faster
+  and within the owner's Sonnet-or-Haiku rule.
 
 ## Running it
 
