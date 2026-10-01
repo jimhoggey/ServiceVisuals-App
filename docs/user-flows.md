@@ -358,6 +358,24 @@ there is anything on disk to delete, however broken.
 
 ---
 
+## Spinner tile
+
+### Fill with AI
+
+The operator's model: "type what I need, get a list, quickly." They paste
+an OpenRouter key once and never think about models. The default is
+`openrouter/auto` on its low cost tier (a fraction of a cent per fill); a
+key with no credit falls back to `openrouter/free` by itself, so "no
+credit" is never an error they see.
+
+**Found and fixed**
+- Unreleased (after v1.40.0) — the free-model default was slow (queues,
+  long reasoning). The owner asked for auto or a small model; auto on its
+  low tier is now the default.
+- Unreleased — the key note said "free OpenRouter API key" next to a hint
+  about a fraction of a cent per fill. It now says the key is free to
+  create, and that Fill with AI still works with no credit.
+
 ## How to use and update this file
 
 1. **Before** changing a screen: read its section and the rules above.

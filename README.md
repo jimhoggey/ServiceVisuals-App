@@ -93,8 +93,10 @@ contain a file path). The full list of events lives in [`stats.py`](stats.py).
      capitals") and either give an exact number or tick **Full list** to let
      the AI return the complete set. Uses your own
      [OpenRouter](https://openrouter.ai/keys) key, pasted once and stored only
-     on your computer; the model is selectable (defaults to `openrouter/free`,
-     which auto-picks a working free model).
+     on your computer; the model is selectable. It defaults to
+     `openrouter/auto` on its lowest cost tier, which picks a small, quick
+     model for a fraction of a cent per fill. An account with no credit
+     falls back to `openrouter/free` automatically, which is free but slower.
    - **QR card**: a "scan to…" code from any website or plain text, with an
      optional heading and caption, accent colour, a 9-way on-screen position,
      and an optional background image, in a choice of three styles — Card

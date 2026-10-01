@@ -2676,6 +2676,91 @@ def check_countdown_format():
               dict(clock, display_format="M:SS")))
 
 
+def check_ai_model_routing():
+    """Spinner Fill with AI: the default model is openrouter/auto held to
+    its low cost tier, and an account with no credit (402) falls back to
+    openrouter/free instead of failing. OpenRouter is faked -- no network,
+    no key."""
+    import io
+    import urllib.error
+    import aiassist
+    print("Spinner: AI model routing (faked OpenRouter)")
+
+    sent = []
+    replies = []
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout=30):
+        body = json.loads(req.data.decode("utf-8"))
+        sent.append(body)
+        status = replies.pop(0)
+        if status != 200:
+            raise urllib.error.HTTPError(req.full_url, status, "x", {},
+                                         io.BytesIO(b""))
+        content = json.dumps(["Genesis", "Exodus"])
+        return _Resp(json.dumps(
+            {"choices": [{"message": {"content": content}}]}).encode())
+
+    saved_urlopen = aiassist.netutil.urlopen
+    saved_key = os.environ.get("OPENROUTER_API_KEY")
+    saved_model = os.environ.pop("OPENROUTER_MODEL", None)
+    os.environ["OPENROUTER_API_KEY"] = "sk-or-smoke-not-real"
+    aiassist.netutil.urlopen = fake_urlopen
+    try:
+        check("the default model is openrouter/auto",
+              aiassist.DEFAULT_MODEL == "openrouter/auto"
+              and aiassist.PRESET_MODELS[0] == "openrouter/auto")
+
+        replies[:] = [200]
+        del sent[:]
+        out = aiassist.generate_entries("books", 2, [], None)
+        check("auto answers on the first try", out == ["Genesis", "Exodus"]
+              and len(sent) == 1, repr(sent))
+        check("auto is asked for its low cost tier",
+              sent[0].get("model") == "openrouter/auto"
+              and sent[0].get("plugins") == [
+                  {"id": "auto-router", "cost_tier": "low"}], repr(sent[0]))
+
+        replies[:] = [402, 200]
+        del sent[:]
+        out = aiassist.generate_entries("books", 2, [], None)
+        check("no credit (402) on auto falls back to openrouter/free",
+              out == ["Genesis", "Exodus"]
+              and [b["model"] for b in sent]
+              == ["openrouter/auto", "openrouter/free"], repr(sent))
+        check("the free fallback carries no auto-router plugin",
+              "plugins" not in sent[1])
+
+        replies[:] = [402]
+        del sent[:]
+        try:
+            aiassist.generate_entries("books", 2, [], "openrouter/free")
+            check("402 on the free pool itself is final", False, "no error")
+        except aiassist.AiError as exc:
+            check("402 on the free pool itself is final, with the reason",
+                  "out of credit" in str(exc) and len(sent) == 1, str(exc))
+
+        replies[:] = [404, 200]
+        del sent[:]
+        aiassist.generate_entries("books", 2, [], "some/model")
+        check("a chosen model that is gone falls back to openrouter/free",
+              [b["model"] for b in sent] == ["some/model", "openrouter/free"])
+    finally:
+        aiassist.netutil.urlopen = saved_urlopen
+        if saved_key is None:
+            os.environ.pop("OPENROUTER_API_KEY", None)
+        else:
+            os.environ["OPENROUTER_API_KEY"] = saved_key
+        if saved_model is not None:
+            os.environ["OPENROUTER_MODEL"] = saved_model
+
+
 def check_millis_size_and_ticking():
     """docs/specs/millis-reveal.md: the two new pure functions that decide
     the countdown millis run's font size and its freeze/tick boundary.
@@ -3589,6 +3674,7 @@ def main():
 
     check_fixed_format()
     check_countdown_format()
+    check_ai_model_routing()
     print()
     check_millis_size_and_ticking()
     print()

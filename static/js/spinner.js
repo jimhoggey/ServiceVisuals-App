@@ -444,8 +444,12 @@
   function updateModelHint() {
     var m = currentModel();
     var hint = $("ai-model-hint");
-    if (m === "openrouter/free")
-      hint.textContent = "openrouter/free auto-picks a working free model — most reliable.";
+    // Recommend, then the cost: auto is the default because free models
+    // were slow, and it spends credit, which a volunteer should know.
+    if (m === "openrouter/auto")
+      hint.textContent = "Fastest — picks a small, cheap model (a fraction of a cent per fill). With no credit on your account it uses free models instead.";
+    else if (m === "openrouter/free")
+      hint.textContent = "Free models only — no credit needed, but they can be slow.";
     else
       hint.textContent = "If this model is busy or offline, it falls back to openrouter/free.";
   }
@@ -533,7 +537,7 @@
     $("ai-generate").disabled = true;
     setAiStatus(full
       ? "Asking the AI for the full list… (can take a moment)"
-      : "Asking the AI… (free models can take a moment)");
+      : "Asking the AI…");
     fetch("/api/ai/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

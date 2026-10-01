@@ -6,11 +6,15 @@ repo, never sent to the browser (the status endpoint returns only a boolean).
 The Flask server holds the key and calls OpenRouter server-side, so the key
 never leaves the machine except to OpenRouter itself.
 
-Model: defaults to `openrouter/free`, OpenRouter's router that picks whatever
-free model is currently up and supports the request — far more reliable than
-pinning one free model (any single one can be queued or offline). The user can
-choose a specific model (e.g. openai/gpt-oss-120b:free) instead. If a chosen
-model stalls or is unavailable, we fall back to openrouter/free automatically.
+Model: defaults to `openrouter/auto` held to its LOW cost tier, which routes
+to the cheapest capable model. A list of short strings is about the easiest
+job an LLM gets, and the free pool behind `openrouter/free` was slow: its
+models queue, and several reason at length before answering. Auto costs a
+fraction of a cent per fill, so it needs credit on the account. Without
+credit (OpenRouter answers 402), or if any chosen model stalls or is
+unavailable, we fall back to `openrouter/free` automatically, so a key with
+no credit still works the way it always did. The user can still pick
+`openrouter/free` or a specific model.
 
 No third-party dependency: the HTTP call uses urllib, like the update checker.
 """
@@ -24,13 +28,20 @@ import urllib.request
 
 import netutil
 
-DEFAULT_MODEL = "openrouter/free"
+DEFAULT_MODEL = "openrouter/auto"
+# The last resort every other choice falls back to: needs no credit.
+FALLBACK_MODEL = "openrouter/free"
+# OpenRouter's auto router ranks candidates by a cost tier; "low" "favors
+# the cheapest capable models". It is also the router's default today, but
+# sent explicitly so a change on their side can't quietly move a volunteer
+# onto expensive models.
+AUTO_ROUTER_PLUGIN = {"id": "auto-router", "cost_tier": "low"}
 # Suggestions offered in the UI dropdown (the user can also type a custom slug).
 PRESET_MODELS = [
+    "openrouter/auto",
     "openrouter/free",
     "openai/gpt-oss-120b:free",
     "openai/gpt-oss-20b:free",
-    "openrouter/auto",
 ]
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 KEY_ENDPOINT = "https://openrouter.ai/api/v1/key"
@@ -200,7 +211,7 @@ class _Retry(Exception):
 def _chat(key, model, messages):
     """One OpenRouter call. Returns the assistant content string. Raises
     AiError (fatal) or _Retry (try the fallback model)."""
-    body = json.dumps({
+    payload = {
         "model": model,
         "messages": messages,
         "temperature": 0.8,
@@ -208,7 +219,14 @@ def _chat(key, model, messages):
         # models spend tokens on reasoning first. 800 used to truncate long
         # lists mid-array, which corrupted the parse.
         "max_tokens": 4000,
-    }).encode("utf-8")
+    }
+    # No "reasoning" effort setting: OpenRouter documents that a model
+    # without reasoning can reject it with a 400, which would cost a
+    # wasted round trip and a fallback on every fill. The low cost tier
+    # already steers auto toward small, quick models.
+    if model == DEFAULT_MODEL:
+        payload["plugins"] = [dict(AUTO_ROUTER_PLUGIN)]
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         ENDPOINT, data=body, method="POST",
         headers={
@@ -224,7 +242,15 @@ def _chat(key, model, messages):
         if exc.code in (401, 403):
             raise AiError("OpenRouter rejected the key — check it in the AI panel.")
         if exc.code == 402:
-            raise AiError("That OpenRouter account is out of credit for this model.")
+            # No credit is the normal state for a free key, now that the
+            # default is a paid router -- so it falls back to the free pool
+            # rather than failing. Only the free pool itself refusing is
+            # final, and then the message is the true reason.
+            if model == FALLBACK_MODEL:
+                raise AiError(
+                    "That OpenRouter account is out of credit for this model.")
+            raise _Retry(
+                "That OpenRouter account is out of credit for this model.")
         if exc.code in (400, 404):
             raise _Retry("The model \"{0}\" isn't available right now.".format(model))
         if exc.code == 429:
@@ -253,18 +279,19 @@ def generate_entries(description, count, existing, model=None, full=False):
     avoiding anything in `existing`. When `full` is True, return the complete
     natural set (e.g. every book of the Bible) up to MAX_ENTRIES; otherwise
     return exactly `count`. Falls back to openrouter/free if the chosen model
-    stalls or is unavailable. Raises AiError with a friendly message on failure."""
+    stalls, is unavailable, or needs credit the account doesn't have. Raises
+    AiError with a friendly message on failure."""
     key = get_key()
     if not key:
-        raise AiError("Add your free OpenRouter API key first (in the AI panel).")
+        raise AiError("Add your OpenRouter API key first (in the AI panel).")
 
     count = max(1, min(MAX_ENTRIES, int(count)))
     existing = [str(e).strip() for e in (existing or []) if str(e).strip()]
     avoid = ", ".join(existing[:60]) if existing else "(none)"
 
     chosen = _clean_model(model) or get_model()
-    # Try the chosen model, then the router (unless it IS the router).
-    chain = [chosen] if chosen == DEFAULT_MODEL else [chosen, DEFAULT_MODEL]
+    # Try the chosen model, then the free pool (unless it IS the free pool).
+    chain = [chosen] if chosen == FALLBACK_MODEL else [chosen, FALLBACK_MODEL]
 
     if full:
         cap = MAX_ENTRIES
