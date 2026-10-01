@@ -733,10 +733,12 @@ def check_clock_validation():
     # fixture, not a regression -- validate_timer_options itself already
     # returns this key (docs/specs/millis-60fps.md, Validation + smoke
     # agent).
+    # Addendum (countdown-format.md): display_format defaults to "" --
+    # automatic, the shape every timer had before the FORMAT box.
     expected = {"minutes": 1, "seconds": 0, "style": "ring",
                 "accent": "#e8b44f", "warn_last10": False,
                 "hold_seconds": 3, "show_millis": False,
-                "fixed_format": False,
+                "fixed_format": False, "display_format": "",
                 "millis_full_size": False, "millis_reveal": False,
                 "millis_reveal_seconds": 60, "millis_60fps": False,
                 "backgrounds": [], "bg_seconds": 10, "bg_dim": 45,
@@ -2568,6 +2570,112 @@ def check_fixed_format():
               dict(clock, fixed_format=True)))
 
 
+def check_countdown_format():
+    """docs/specs/countdown-format.md: the typed FORMAT box. Every row of
+    the spec's behaviour table, every error message, and the rule that a
+    typed format decides milliseconds by itself while an empty one leaves
+    the old booleans exactly as they were."""
+    from render.timer import (
+        _format_remaining, _millis_text, parse_countdown_format)
+    from validation import ValidationError, validate_timer_options
+    print("Timer: typed countdown format")
+
+    table = (("", ("0:20", "5:00", "1:30:00"), 0),
+             ("M:SS", ("0:20", "5:00", "90:00"), 0),
+             ("M:SS.000", ("0:20", "5:00", "90:00"), 3),
+             ("MM:SS", ("00:20", "05:00", "90:00"), 0),
+             ("HH:MM:SS", ("00:00:20", "00:05:00", "01:30:00"), 0),
+             ("SS", ("20", "300", "5400"), 0),
+             ("SS.0", ("20", "300", "5400"), 1),
+             (" m:ss.00 ", ("0:20", "5:00", "90:00"), 2))
+    for typed, want, ms in table:
+        layout = parse_countdown_format(typed)
+        got = tuple(_format_remaining(t, t, False, layout)
+                    for t in (20, 300, 5400))
+        check("{0!r} reads {1}".format(typed, " / ".join(want)),
+              got == want, repr(got))
+        check("{0!r} has {1} millis digits".format(typed, ms),
+              (layout["ms_digits"] if layout else 0) == ms)
+    check("the leftmost unit absorbs the overflow while counting down",
+          [_format_remaining(r, 5400, False, parse_countdown_format("M:SS"))
+           for r in (5399, 600, 59, 0)]
+          == ["89:59", "10:00", "0:59", "0:00"])
+    check("millis are truncated, never rounded",
+          (_millis_text(4999, 3), _millis_text(4999, 2),
+           _millis_text(4999, 1)) == (".999", ".99", ".9"))
+    check("a typed format is normalised (trimmed, uppercase)",
+          parse_countdown_format(" hh:mm:ss.0 ")["text"] == "HH:MM:SS.0")
+
+    errors = (("X", "Use only H, M, S, colons and .000 — like "
+                    "M:SS.000."),
+              ("M0:SS", "Use only H, M, S, colons and .000 — like "
+                        "M:SS.000."),
+              ("MSS", "Put a colon between the units, like M:SS."),
+              ("H:SS", "Write the units biggest first, ending in seconds: "
+                       "H:MM:SS, M:SS or SS."),
+              ("M", "Write the units biggest first, ending in seconds: "
+                    "H:MM:SS, M:SS or SS."),
+              (":SS", "Write the units biggest first, ending in seconds: "
+                      "H:MM:SS, M:SS or SS."),
+              ("M:S", "Every unit after a colon needs two letters, like "
+                      "M:SS."),
+              ("MMMM:SS", "The first unit can be at most 3 letters wide."),
+              ("M:SS.", "Milliseconds go at the end as .0, .00 or .000."),
+              ("M:SS.5", "Milliseconds go at the end as .0, .00 or .000."),
+              ("M:SS.0000", "Milliseconds go at the end as .0, .00 or "
+                            ".000."),
+              ("M:SS.0.0", "Milliseconds go at the end as .0, .00 or "
+                           ".000."),
+              ("M" * 17, "The format can be at most 16 characters."))
+    base = {"minutes": 5, "seconds": 0}
+    for typed, message in errors:
+        try:
+            validate_timer_options(dict(base, display_format=typed))
+            check("{0!r} is refused".format(typed), False, "no error")
+        except ValidationError as exc:
+            check("{0!r} is refused with its message".format(typed),
+                  str(exc) == message, str(exc))
+    try:
+        validate_timer_options(dict(base, display_format=5))
+        check("a non-string format is refused", False, "no error")
+    except ValidationError as exc:
+        check("a non-string format is refused",
+              str(exc) == "The format can be at most 16 characters.",
+              str(exc))
+
+    clean = validate_timer_options(dict(base, display_format="m:ss.000",
+                                        show_millis=False,
+                                        fixed_format=True))
+    check("a millis format turns milliseconds on, whatever was sent",
+          clean["show_millis"] is True, repr(clean))
+    check("a typed format turns fixed_format off",
+          clean["fixed_format"] is False)
+    check("the normalised format is what reaches the renderer",
+          clean["display_format"] == "M:SS.000")
+    clean = validate_timer_options(dict(base, display_format="HH:MM:SS",
+                                        show_millis=True))
+    check("a format without millis turns milliseconds off",
+          clean["show_millis"] is False)
+    clean = validate_timer_options(dict(base, display_format="  ",
+                                        show_millis=True,
+                                        fixed_format=True))
+    check("an empty box leaves the old booleans exactly as sent",
+          clean["show_millis"] is True and clean["fixed_format"] is True
+          and clean["display_format"] == "")
+    try:
+        validate_timer_options({"minutes": 31, "seconds": 0,
+                                "display_format": "M:SS.0"})
+        check("a millis format keeps the 30-minute ceiling", False,
+              "no error")
+    except ValidationError as exc:
+        check("a millis format keeps the 30-minute ceiling",
+              "at most 30 minutes" in str(exc), str(exc))
+    clock = {"mode": "clock", "start": "19:59:50", "duration_seconds": 30}
+    check("clock mode ignores display_format",
+          "display_format" not in validate_timer_options(
+              dict(clock, display_format="M:SS")))
+
+
 def check_millis_size_and_ticking():
     """docs/specs/millis-reveal.md: the two new pure functions that decide
     the countdown millis run's font size and its freeze/tick boundary.
@@ -3480,6 +3588,7 @@ def main():
     print()
 
     check_fixed_format()
+    check_countdown_format()
     print()
     check_millis_size_and_ticking()
     print()

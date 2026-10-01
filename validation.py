@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from render.encoder import ALPHA_FORMATS, UPLOADS_DIR
 from render.qr import POSITIONS, QR_STYLES
-from render.timer import CLOCK_STYLES
+from render.timer import CLOCK_STYLES, parse_countdown_format
 from backgrounds import (
     BACKGROUNDS_DIR, BACKGROUND_ID_RE, BACKGROUNDS_PER_TIMER_MAX)
 
@@ -145,6 +145,20 @@ def _validate_countdown_options(options):
         raise ValidationError(
             '"Fixed 00:00:00 format" must be true or false.')
 
+    # The typed format (docs/specs/countdown-format.md) replaced both boxes
+    # above in the UI. When one is typed it decides them, so a payload can
+    # never ask for "M:SS.000" with milliseconds off. Empty keeps the two
+    # booleans exactly as sent, for anything still calling the old way.
+    try:
+        layout = parse_countdown_format(options.get("display_format", ""))
+    except ValueError as exc:
+        raise ValidationError(str(exc))
+    display_format = ""
+    if layout is not None:
+        display_format = layout["text"]
+        show_millis = layout["ms_digits"] > 0
+        fixed_format = False
+
     # Two independent countdown-only options (docs/specs/millis-reveal.md).
     # Accepted and validated regardless of show_millis, exactly like
     # fixed_format above — they're simply inert when millis are off. No
@@ -193,6 +207,7 @@ def _validate_countdown_options(options):
         "hold_seconds": hold_seconds,
         "show_millis": show_millis,
         "fixed_format": fixed_format,
+        "display_format": display_format,
         "millis_full_size": millis_full_size,
         "millis_reveal": millis_reveal,
         "millis_reveal_seconds": millis_reveal_seconds,

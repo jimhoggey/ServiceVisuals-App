@@ -243,14 +243,23 @@ toggle meaning "images are the background". Adding an image is a separate
 - v1.34.0 — EXPORT button and preview caption still said MP4 while
   exporting .mov.
 
-### Milliseconds
+### Number format and milliseconds
 
-Options live under **Show milliseconds**, countdown only. None of them do
-anything in clock mode.
+ADVANCED → **Number format**. In countdown mode the shape is typed into
+**FORMAT** (spec: `docs/specs/countdown-format.md`): `H`, `M`, `S`, and
+`.000` for milliseconds. Empty means the usual automatic layout. The owner's
+model: "I type what I want to see" — `M:SS.000` on 20 s is `0:20.000`, and
+the leftmost unit stretches on its own (`M:SS` on 10 minutes is `10:00`).
+The hint under the box always says what the timer **starts at**, so the
+operator can see their typing was read the way they meant.
+
+Clock mode hides FORMAT and keeps a plain **Show milliseconds** checkbox;
+the clock's own 12/24-hour and seconds settings decide its shape. The
+three options below appear only in countdown mode with a `.0` part typed.
 
 | Option | Operator's model |
 |---|---|
-| Show milliseconds | Adds `.000` — renders at 30 fps, slower to export |
+| FORMAT with `.000` | Adds milliseconds — renders at 30 fps, slower to export. `.0` / `.00` show fewer digits |
 | Full-size milliseconds | `.000` as tall as the minutes and seconds; the whole timer shrinks 10–16% to fit |
 | Hold at zero until the end | Shows `.000` without ticking until the last N seconds (default 60), then ticks — **seamless, nothing moves** |
 | Smoother milliseconds (60 fps) | Smoother ticking; ~2× render time, ~1.5× file; **capped at 15:00** (15:00 itself allowed) |
@@ -276,6 +285,23 @@ anything in clock mode.
   clock mode. (Rule 7.)
 - v1.35.0 — past 15:00 the 60 fps box disables and unticks itself, so the
   request can never carry 60 fps past the cap.
+- Unreleased (after v1.40.0) — three checkboxes (Show milliseconds, Full-size,
+  Fixed 00:00:00) were too many ways to describe one shape. The owner asked
+  to type it instead; FORMAT replaced Show milliseconds and Fixed format,
+  and the millis-only options now hide instead of sitting greyed out.
+- Unreleased — with an invalid format the preview quietly fell back to the
+  automatic layout, which reads as "my format was dropped". It now says
+  "Fix the format to see the preview". (Rule 1.)
+
+**Found, not yet fixed**
+- At 1024 wide the FORMAT box sits well below the preview, so the volunteer
+  types without seeing the result. The "Starts at …" hint under the box is
+  the live feedback for now; a sticky preview is a later layout pass.
+
+Rules confirmed by the review: a field that gates Export shows its error
+directly under itself, in the same screenful as the disabled button; and a
+hidden invalid field never blocks the mode it is hidden in (an invalid
+format leaves Clock's Export enabled).
 
 ### Exporting a long render
 

@@ -509,7 +509,8 @@ select { display: block; width: 100%; font-size: 14px; }
    Scoped to direct children of a group so the scoreboard's in-place
    editor and the AI panel's row inputs keep their own rules. */
 .group > input[type="text"],
-.group > input[type="url"] {
+.group > input[type="url"],
+#timer-format {
   display: block;
   width: 100%;
   box-sizing: border-box;
@@ -522,9 +523,11 @@ select { display: block; width: 100%; font-size: 14px; }
   padding: 10px 12px;
 }
 .group > input[type="text"]::placeholder,
-.group > input[type="url"]::placeholder { color: var(--ink-faint); }
+.group > input[type="url"]::placeholder,
+#timer-format::placeholder { color: var(--ink-faint); }
 
 input[type="number"]:focus,
+#timer-format:focus,
 .group > input[type="text"]:focus,
 .group > input[type="url"]:focus,
 select:focus,
@@ -562,6 +565,9 @@ textarea:focus {
   color: var(--ink-faint);
 }
 .hint.is-bad { color: var(--red-ink); }
+/* The FORMAT box's hint is two lines and sat flush on the first millis
+   checkbox that appears under it (UX review of the FORMAT box). */
+#timer-format-wrap { margin-bottom: 14px; }
 
 /* Technical codec line under the transparent-format recommendation (spec:
    docs/specs/alpha-export.md, copy review round 3) -- sits right under

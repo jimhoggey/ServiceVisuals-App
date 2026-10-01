@@ -62,8 +62,12 @@ contain a file path). The full list of events lives in [`stats.py`](stats.py).
      warn colour in the final 10 seconds, keep 0:00 on screen — or switch its
      MODE to **Clock** for a live wall clock that ticks forward from a start
      time you choose, in Classic or Ring style, 12- or 24-hour format, with
-     optional seconds and milliseconds. **Show milliseconds** works in
-     Countdown mode too, for a `5:00.000`-style timer, with three more
+     optional seconds and milliseconds. In Countdown mode, type the shape
+     you want into **FORMAT** under Advanced — `H` hours, `M` minutes, `S`
+     seconds, `.000` milliseconds: `M:SS.000` turns a 20-second timer into
+     `0:20.000`, `HH:MM:SS` gives `00:05:00`, and the first unit stretches
+     as needed (`M:SS` on 90 minutes reads `90:00`). Leave it empty for the
+     usual layout. With milliseconds in the format there are three more
      Countdown-only options: **Full-size milliseconds** draws the `.000`
      at the same size as the main digits (the whole timer is drawn a
      little smaller to still fit), **Hold at zero until the end** keeps

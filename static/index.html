@@ -443,12 +443,31 @@
                  this lives outside the clock-only groups above and is never
                  hidden by applyTimerMode(). -->
             <fieldset class="group" id="timer-millis-group">
-              <legend>Milliseconds</legend>
-              <div class="check-row">
+              <legend>Number format</legend>
+              <!-- Typed countdown format (spec: docs/specs/countdown-format.md):
+                   replaces the countdown's Show milliseconds and Fixed
+                   00:00:00 boxes. Countdown only -- applyTimerMode() hides
+                   it in clock mode, where the clock's own 12/24-hour and
+                   seconds settings decide the shape. -->
+              <div id="timer-format-wrap">
+                <div class="label-row">
+                  <label for="timer-format">FORMAT</label>
+                </div>
+                <input type="text" id="timer-format" spellcheck="false" autocomplete="off"
+                  maxlength="16" placeholder="Automatic">
+                <p class="hint" id="timer-format-hint">Leave empty for the usual layout. Type M:SS.000 to add milliseconds.</p>
+              </div>
+              <!-- Clock mode keeps its checkbox: the FORMAT box above is
+                   countdown-only. -->
+              <div class="check-row" id="timer-show-millis-row">
                 <input type="checkbox" id="timer-show-millis">
                 <label for="timer-show-millis">Show milliseconds</label>
               </div>
               <p class="hint" id="timer-show-millis-hint">Renders at 30 fps &#8212; longer to export</p>
+              <!-- Only shown in countdown mode while the typed format has
+                   milliseconds in it; nothing in here changes a render
+                   without them. -->
+              <div id="timer-millis-options">
               <!-- Full-size / Hold-at-zero (spec: docs/specs/millis-reveal.md):
                    both independent of each other and of style -- neither
                    disables the other, nothing left to cross-check (see the
@@ -472,11 +491,6 @@
                 <input type="number" id="timer-millis-reveal-seconds" inputmode="numeric" min="1" max="1800" step="1" value="60">
               </div>
               <p class="hint" id="timer-millis-reveal-seconds-hint" hidden>1 to 1800 seconds</p>
-              <div class="check-row" id="timer-fixed-row">
-                <input type="checkbox" id="timer-fixed-format">
-                <label for="timer-fixed-format">Fixed 00:00:00 format</label>
-              </div>
-              <p class="hint" id="timer-fixed-hint">Every timer reads 00:05:00, so the numbers look the same at any length.</p>
               <!-- Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
                    countdown-only, unlike the millis controls above -- hidden
                    outright in clock mode by applyTimerMode() (same mechanism
@@ -491,6 +505,7 @@
                 <label for="timer-millis-60fps">Smoother milliseconds (60 fps)</label>
               </div>
               <p class="hint" id="timer-millis-60fps-hint">Turn this on when the ticking numbers are the whole point &#8212; a dramatic final countdown viewed up close. It roughly doubles render time and makes the file about 50% bigger. Only helps if your editor also exports at 60 fps: export at 30 and the extra frames are thrown away.</p>
+              </div>
             </fieldset>
             <fieldset class="group" id="timer-options-group">
               <legend>Options</legend>

@@ -515,7 +515,89 @@ def _render_digits(text, color, met):
     return block
 
 
-def _format_remaining(rem, total, fixed=False):
+# ---- typed countdown format (docs/specs/countdown-format.md) -------------
+#
+# The volunteer types the shape: "M:SS.000", "HH:MM:SS", "SS". Pure and
+# mirrored line for line by parseCountdownFormat() in static/js/timer.js,
+# because the preview has to show exactly what the first frame will.
+
+COUNTDOWN_FORMAT_MAX = 16
+_UNIT_SECONDS = {"H": 3600, "M": 60, "S": 1}
+_FORMAT_CHARS_RE = re.compile(r"[HMS:]*")
+
+FORMAT_ERR_CHARS = "Use only H, M, S, colons and .000 — like M:SS.000."
+FORMAT_ERR_MIXED = "Put a colon between the units, like M:SS."
+FORMAT_ERR_ORDER = ("Write the units biggest first, ending in seconds: "
+                    "H:MM:SS, M:SS or SS.")
+FORMAT_ERR_PAIR = "Every unit after a colon needs two letters, like M:SS."
+FORMAT_ERR_WIDE = "The first unit can be at most 3 letters wide."
+FORMAT_ERR_MILLIS = "Milliseconds go at the end as .0, .00 or .000."
+FORMAT_ERR_LONG = "The format can be at most 16 characters."
+
+
+def parse_countdown_format(text):
+    """None for an empty box (automatic), else {"units": [(letter, width),
+    ...], "ms_digits": 0..3, "text": the normalised string}. Raises
+    ValueError carrying the plain-English message the UI shows.
+
+    Units must run H, M, S without a gap and always end in seconds: a
+    countdown showing only minutes would have to round 4:59 to something,
+    and either answer looks wrong for a whole minute.
+    """
+    if text is None:
+        return None
+    if not isinstance(text, str) or len(text) > COUNTDOWN_FORMAT_MAX:
+        raise ValueError(FORMAT_ERR_LONG)
+    text = text.strip()
+    if not text:
+        return None
+    main, dot, ms = text.partition(".")
+    ms_digits = 0
+    if dot:
+        # The millis part has to be the LAST thing, so anything after the
+        # dot that isn't zeros -- a second dot, a letter -- is this error.
+        if not 1 <= len(ms) <= 3 or ms.strip("0"):
+            raise ValueError(FORMAT_ERR_MILLIS)
+        ms_digits = len(ms)
+    main = main.upper()
+    if not _FORMAT_CHARS_RE.fullmatch(main):
+        raise ValueError(FORMAT_ERR_CHARS)
+    groups = main.split(":")
+    if any(len(set(g)) > 1 for g in groups):
+        raise ValueError(FORMAT_ERR_MIXED)
+    letters = "".join(g[:1] for g in groups)
+    if "" in groups or letters not in ("S", "MS", "HMS"):
+        raise ValueError(FORMAT_ERR_ORDER)
+    if any(len(g) != 2 for g in groups[1:]):
+        raise ValueError(FORMAT_ERR_PAIR)
+    if len(groups[0]) > 3:
+        raise ValueError(FORMAT_ERR_WIDE)
+    return {"units": [(g[0], len(g)) for g in groups],
+            "ms_digits": ms_digits,
+            "text": main + ("." + "0" * ms_digits if ms_digits else "")}
+
+
+def _format_with_units(rem, units):
+    """Whole seconds `rem` in a parsed format's units. The leftmost unit
+    takes everything above it (M:SS on 90 minutes is "90:00") and is
+    zero-padded to its letter count; the rest are always two digits."""
+    parts = []
+    above = None
+    for i, (letter, width) in enumerate(units):
+        unit = _UNIT_SECONDS[letter]
+        value = rem // unit if above is None else (rem % above) // unit
+        parts.append(str(value).zfill(width if i == 0 else 2))
+        above = unit
+    return ":".join(parts)
+
+
+def _millis_text(rem_ms, ms_digits):
+    """".873" / ".87" / ".8" -- truncated, never rounded, so the run never
+    shows the next second's value on the last frame of this one."""
+    return "." + "{0:03d}".format(rem_ms % 1000)[:ms_digits]
+
+
+def _format_remaining(rem, total, fixed=False, layout=None):
     """Format `rem` with field widths fixed by the INITIAL total, zero-padded.
 
     A 10-minute timer renders "10:00" then "09:59" (not " 9:59"): the string
@@ -528,7 +610,12 @@ def _format_remaining(rem, total, fixed=False):
     HH:MM:SS, so 30 seconds and 90 minutes are the same string length and
     therefore the same digit size on screen. Costs size on a short timer
     ("00:00:30" auto-fits smaller than "0:30"), which is the whole point.
+
+    A typed `layout` (parse_countdown_format) wins over both: the volunteer
+    said exactly which shape they want.
     """
+    if layout is not None:
+        return _format_with_units(rem, layout["units"])
     if fixed:
         return "{0:02d}:{1:02d}:{2:02d}".format(
             rem // 3600, (rem % 3600) // 60, rem % 60)
@@ -621,7 +708,7 @@ RING_DIGITS_MAX = 190            # the countdown ring's digit size
 
 
 def _clock_font_size(main_text, show_millis, has_tag, fit_width=1600.0,
-                     cap=400, ms_scale=CLOCK_MS_SCALE):
+                     cap=400, ms_scale=CLOCK_MS_SCALE, ms_sample=".000"):
     """Auto-size clock digits: fit `fit_width` px wide, capped at `cap`.
 
     Same ref-then-scale approach as _classic_font_size, generalised to the
@@ -641,13 +728,17 @@ def _clock_font_size(main_text, show_millis, has_tag, fit_width=1600.0,
     parameter existed. The countdown's millis_full_size option is the only
     caller that ever passes something else (1.0), so the joint fit widens
     to hold the millis run at full width instead of 55%.
+
+    `ms_sample` is the millis run being fitted: a typed ".0" or ".00"
+    (docs/specs/countdown-format.md) is narrower than ".000", and fitting
+    the wide one would leave those digits smaller than they need to be.
     """
     ref = 200
     met_main = _digits_metrics(ref)
     w = _text_width(main_text, met_main)
     if show_millis:
         met_ms = _digits_metrics(max(1, int(round(ref * ms_scale))))
-        w += _text_width(".000", met_ms)
+        w += _text_width(ms_sample, met_ms)
     if has_tag:
         tag_size = max(1, int(round(ref * CLOCK_TAG_SCALE)))
         tag_font = fonts.load("digits", tag_size)
@@ -948,6 +1039,18 @@ def render_timer(options, progress_cb):
     # millis this whole branch is skipped and `fps`/`out_fps` come out
     # exactly as before.
     show_millis = bool(options.get("show_millis", False))
+    # A typed format (docs/specs/countdown-format.md) decides millis by
+    # itself -- validation already made show_millis agree, this just makes
+    # the renderer not depend on that. Unparseable here means a caller
+    # skipped validation; automatic is the safe reading. Empty or absent
+    # leaves layout None and everything below exactly as it was.
+    try:
+        layout = parse_countdown_format(options.get("display_format"))
+    except ValueError:
+        layout = None
+    if layout is not None:
+        show_millis = layout["ms_digits"] > 0
+    ms_digits = layout["ms_digits"] if layout is not None else 3
     # docs/specs/millis-60fps.md: accepted regardless of show_millis, like
     # fixed_format/millis_full_size/millis_reveal below — simply inert
     # when millis are off, since _millis_fps is only called inside the
@@ -992,7 +1095,8 @@ def render_timer(options, progress_cb):
     has_bg = bool(options.get("backgrounds")) and not is_alpha
 
     # Always HH:MM:SS instead of the shortest shape that fits the total.
-    fixed = bool(options.get("fixed_format"))
+    # A typed format replaces this, so it can't also apply.
+    fixed = bool(options.get("fixed_format")) and layout is None
 
     # Two independent countdown-only options (docs/specs/millis-reveal.md).
     # Clock mode returns via _render_clock above before this line is ever
@@ -1003,13 +1107,26 @@ def render_timer(options, progress_cb):
     millis_reveal_seconds = max(1, min(1800, _to_int(
         options.get("millis_reveal_seconds"), 60)))
 
-    initial_text = _format_remaining(total, total, fixed)
+    initial_text = _format_remaining(total, total, fixed, layout)
+    ms_sample = "." + "0" * ms_digits
     if style == "ring":
         size, digits_cy = 190, RING_CY
     elif style == "bar":
         size, digits_cy = 330, 500       # slightly above center
     else:
         size, digits_cy = _classic_font_size(initial_text), HEIGHT // 2
+    if layout is not None and not show_millis and style != "classic":
+        # A typed shape can be far wider than the automatic one ("HHH:MM:SS"
+        # against "5:00"), and at ring/bar's fixed size it ran through the
+        # track. Fit it the way the millis path below does, capped at the
+        # fixed size, so a short typed shape looks exactly as it always did.
+        # Only with a typed format: the automatic path never enters here.
+        if style == "ring":
+            size = _clock_font_size(initial_text, False, False,
+                                    RING_INNER_FIT, RING_DIGITS_MAX)
+        else:
+            size = _clock_font_size(initial_text, False, False,
+                                    BAR_WIDTH, 330)
     if show_millis:
         # ".mmm" widens the string a lot ("5:00" -> "5:00.000"); refit per
         # style exactly like clock mode's sizing, so the ring/bar digits
@@ -1027,13 +1144,14 @@ def render_timer(options, progress_cb):
         if style == "ring":
             size = _clock_font_size(initial_text, True, False,
                                     RING_INNER_FIT, RING_DIGITS_MAX,
-                                    ms_scale=ms_scale)
+                                    ms_scale=ms_scale, ms_sample=ms_sample)
         elif style == "bar":
             size = _clock_font_size(initial_text, True, False,
-                                    BAR_WIDTH, 330, ms_scale=ms_scale)
+                                    BAR_WIDTH, 330, ms_scale=ms_scale,
+                                    ms_sample=ms_sample)
         else:
             size = _clock_font_size(initial_text, True, False,
-                                    ms_scale=ms_scale)
+                                    ms_scale=ms_scale, ms_sample=ms_sample)
     met = _digits_metrics(size)
     met_ms = _digits_metrics(_millis_size(size, millis_full_size)) \
         if show_millis else None
@@ -1063,7 +1181,7 @@ def render_timer(options, progress_cb):
 
     def base_for(rem, idx):
         color = accent if (warn_last10 and rem <= 10) else DIGITS_COLOR
-        text = _format_remaining(rem, total, fixed)
+        text = _format_remaining(rem, total, fixed, layout)
         key = (text, color, idx)
         with bases_lock:
             cached = bases.get(key)
@@ -1101,14 +1219,14 @@ def render_timer(options, progress_cb):
         # freeze, so there is no reason for their colour to change at
         # sub-second precision either.
         color = accent if (warn_last10 and rem <= 10) else DIGITS_COLOR
-        text = _format_remaining(rem, total, fixed)
+        text = _format_remaining(rem, total, fixed, layout)
         key = (text, color, idx)
         with frozen_bases_lock:
             cached = frozen_bases.get(key)
             if cached is not None:
                 frozen_bases.move_to_end(key)
                 return cached
-        block = _render_clock_block(text, ".000", "", color, color,
+        block = _render_clock_block(text, ms_sample, "", color, color,
                                     met, met_ms, None, 0)
         base = plates[idx].copy()
         _paste_digits(base, block,
@@ -1143,13 +1261,14 @@ def render_timer(options, progress_cb):
             else:
                 color = (accent if (warn_last10 and rem_ms <= 10_000)
                         else DIGITS_COLOR)
-                main_text = _format_remaining(rem_ms // 1000, total, fixed)
+                main_text = _format_remaining(rem_ms // 1000, total, fixed,
+                                              layout)
                 # Leading "." makes this the same "small run" shape clock
                 # mode passes (main_text[-4:] there always keeps the dot
                 # too) — the "." gets its own narrow slot via
                 # _digits_metrics/_slot_width, same as everywhere else a
                 # dot is drawn.
-                ms_text = ".{0:03d}".format(rem_ms % 1000)
+                ms_text = _millis_text(rem_ms, ms_digits)
                 block = _render_clock_block(main_text, ms_text, "", color,
                                             color, met, met_ms, None, 0)
                 base = plates[idx].copy()

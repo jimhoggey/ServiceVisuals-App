@@ -642,7 +642,8 @@
     // checkbox directly here is the true, corrected state).
     var specLine = $("timer-spec-line");
     if (specLine) {
-      var showMillisOn = $("timer-show-millis").checked;
+      var showMillisOn = isClockMode ? $("timer-show-millis").checked
+                                     : countdownMillisOn();
       var millis60fpsLive = !isClockMode && showMillisOn &&
           $("timer-millis-60fps").checked;
       // Plain timers export at 15fps (TIMER_OUTPUT_FPS in
@@ -737,8 +738,17 @@
     // straight to the format string, `false` when the toggle itself is off.
     var transparentOn = $("timer-bg-transparent").getAttribute("aria-pressed") === "true";
     var transparentFormatEl = document.querySelector('input[name="timer-transparent-format"]:checked');
+    var mode = modeEl ? modeEl.value : "countdown";
+    // Typed countdown format (spec: docs/specs/countdown-format.md): in
+    // countdown mode it alone decides milliseconds -- the checkbox is
+    // clock-only now and hidden there, so a stale tick from clock mode
+    // must not leak into a countdown. An invalid format reads as "no
+    // millis" here; validateTimer() is what blocks the export.
+    var parsed = parseCountdownFormat($("timer-format").value);
+    var showMillis = mode === "clock" ? $("timer-show-millis").checked
+        : !!(parsed.layout && parsed.layout.ms > 0);
     return {
-      mode: modeEl ? modeEl.value : "countdown",
+      mode: mode,
       minutes: toInt($("timer-minutes").value, 0),
       seconds: toInt($("timer-seconds").value, 0),
       style: styleEl ? styleEl.value : "classic",
@@ -751,12 +761,15 @@
       clockLength: toInt($("timer-clock-length").value, 30),
       clockFormat: formatEl ? formatEl.value : "12h",
       showSeconds: $("timer-clock-show-seconds").checked,
-      // Addendum (v1.23.0): one checkbox, one id, used by both modes.
-      showMillis: $("timer-show-millis").checked,
-      fixedFormat: $("timer-fixed-format").checked,
+      showMillis: showMillis,
+      displayFormat: $("timer-format").value.replace(/^\s+|\s+$/g, ""),
+      formatLayout: parsed.layout,
+      formatError: parsed.error,
+      // Digits in the millis run: the typed count, or the clock's fixed 3.
+      msDigits: parsed.layout && mode !== "clock" ? parsed.layout.ms : 3,
       // Full-size / Hold-at-zero millis (spec: docs/specs/millis-reveal.md):
-      // countdown-only, read unconditionally like fixedFormat above --
-      // timerPayload() is what keeps them out of the clock branch.
+      // countdown-only, read unconditionally -- timerPayload() is what
+      // keeps them out of the clock branch.
       millisFullSize: $("timer-millis-full-size").checked,
       millisReveal: $("timer-millis-reveal").checked,
       millisRevealSeconds: toInt($("timer-millis-reveal-seconds").value, 60),
@@ -794,7 +807,7 @@
     if (total > 7200) return "The timer can run for at most 120 minutes in total.";
     // Mirrors MILLIS_MAX_SECONDS in validation.py: 30 fps with nothing
     // cacheable.
-    if ($("timer-show-millis").checked && total > 1800) {
+    if (countdownMillisOn() && total > 1800) {
       return "With milliseconds on, the timer can run for at most 30 minutes. Turn milliseconds off for a longer timer.";
     }
     return null;
@@ -852,15 +865,97 @@
     // quick timer whenever that box -- hidden by then -- had been left
     // empty: an error about a feature the operator had switched off,
     // pointing at a field they could no longer see.
-    return validateTimerDuration() || validateTimerHold() ||
+    return t.formatError || validateTimerDuration() || validateTimerHold() ||
         (t.showMillis && t.millisReveal
             ? validateTimerMillisRevealSeconds() : null);
+  }
+
+  // Typed countdown format (spec: docs/specs/countdown-format.md). Mirrors
+  // parse_countdown_format() in render/timer.py line for line -- the same
+  // rules in the same order, so the same typing gets the same message --
+  // because the preview must show exactly what the first frame will.
+  // Returns {layout: null|{units, ms}, error: null|"message"}.
+  var FORMAT_ERRORS = {
+    chars: "Use only H, M, S, colons and .000 — like M:SS.000.",
+    mixed: "Put a colon between the units, like M:SS.",
+    order: "Write the units biggest first, ending in seconds: " +
+        "H:MM:SS, M:SS or SS.",
+    pair: "Every unit after a colon needs two letters, like M:SS.",
+    wide: "The first unit can be at most 3 letters wide.",
+    millis: "Milliseconds go at the end as .0, .00 or .000.",
+    long: "The format can be at most 16 characters."
+  };
+  var UNIT_SECONDS = { H: 3600, M: 60, S: 1 };
+
+  // The countdown's millis switch now: does the typed format end in .0s?
+  function countdownMillisOn() {
+    var p = parseCountdownFormat($("timer-format").value);
+    return !!(p.layout && p.layout.ms > 0);
+  }
+
+  function parseCountdownFormat(raw) {
+    var fail = function (key) { return { layout: null, error: FORMAT_ERRORS[key] }; };
+    if (raw.length > 16) return fail("long");
+    var text = raw.replace(/^\s+|\s+$/g, "");
+    if (!text) return { layout: null, error: null };
+    var dotAt = text.indexOf(".");
+    var main = dotAt < 0 ? text : text.slice(0, dotAt);
+    var ms = 0;
+    if (dotAt >= 0) {
+      var tail = text.slice(dotAt + 1);
+      if (tail.length < 1 || tail.length > 3 || !/^0+$/.test(tail)) {
+        return fail("millis");
+      }
+      ms = tail.length;
+    }
+    main = main.toUpperCase();
+    if (!/^[HMS:]*$/.test(main)) return fail("chars");
+    var groups = main.split(":");
+    var i, letters = "";
+    for (i = 0; i < groups.length; i++) {
+      if (!/^(H*|M*|S*)$/.test(groups[i])) return fail("mixed");
+    }
+    for (i = 0; i < groups.length; i++) letters += groups[i].charAt(0);
+    var hasEmpty = false;
+    for (i = 0; i < groups.length; i++) if (!groups[i]) hasEmpty = true;
+    if (hasEmpty || (letters !== "S" && letters !== "MS" && letters !== "HMS")) {
+      return fail("order");
+    }
+    for (i = 1; i < groups.length; i++) {
+      if (groups[i].length !== 2) return fail("pair");
+    }
+    if (groups[0].length > 3) return fail("wide");
+    var units = [];
+    for (i = 0; i < groups.length; i++) {
+      units.push({ letter: groups[i].charAt(0), width: groups[i].length });
+    }
+    return { layout: { units: units, ms: ms }, error: null };
+  }
+
+  // Mirrors _format_with_units(): the leftmost unit takes everything above
+  // it and is padded to its letter count; the rest are two digits.
+  function formatWithUnits(rem, units) {
+    var parts = [], above = null;
+    for (var i = 0; i < units.length; i++) {
+      var unit = UNIT_SECONDS[units[i].letter];
+      var value = above === null ? Math.floor(rem / unit)
+                                 : Math.floor((rem % above) / unit);
+      var s = String(value);
+      var width = i === 0 ? units[i].width : 2;
+      while (s.length < width) s = "0" + s;
+      parts.push(s);
+      above = unit;
+    }
+    return parts.join(":");
   }
 
   // Same display rule as the renderer: unpadded minutes, H:MM:SS above 1 hour.
   // Mirrors _format_remaining in render/timer.py: zero-padded to the initial
   // total's width so the preview shows exactly what the video will.
-  function formatClock(remaining, total, fixed) {
+  //
+  // A typed `layout` (parseCountdownFormat below) wins over both rules.
+  function formatClock(remaining, total, fixed, layout) {
+    if (layout) return formatWithUnits(remaining, layout.units);
     if (fixed) {
       return pad2(Math.floor(remaining / 3600)) + ":" +
         pad2(Math.floor((remaining % 3600) / 60)) + ":" + pad2(remaining % 60);
@@ -1103,14 +1198,27 @@
 
     if (t.mode === "clock") { drawClockTimerPreview(ctx, t); return; }
 
+    // An invalid typed format used to fall back to the automatic layout
+    // here, which read as "my format was dropped" to anyone looking up from
+    // the box (UX review of the FORMAT box). Say so instead of pretending.
+    if (t.formatError) {
+      ctx.font = "600 22px " + FONT_LABEL;
+      ctx.fillStyle = TEXT_LIGHT;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Fix the format to see the preview", PW / 2, PH / 2);
+      return;
+    }
+
     var total = Math.max(0, t.minutes * 60 + t.seconds);
-    var text = formatClock(total, total, t.fixedFormat);
+    var text = formatClock(total, total, false, t.formatLayout);
     // renderer: accent digits whenever remaining <= 10s (first frame shown here)
     var digitColor = (t.warn && total > 0 && total <= 10) ? t.accent : TEXT_LIGHT;
     // Addendum (v1.23.0): first frame is always the full total, so millis
     // are always ".000" here — never derived from wall time (drawClockTimerPreview
     // above follows the same "frame 0" rule for clock mode).
-    var millis = t.showMillis ? ".000" : "";
+    // A typed ".0"/".00" draws one/two zeros, like the renderer's run.
+    var millis = t.showMillis ? "." + "000".slice(0, t.msDigits) : "";
     // Full-size millis (spec: docs/specs/millis-reveal.md): 1.0 instead of
     // today's fixed 0.55, threaded into every clockCompositeWidth/
     // drawClockComposite call below so the preview's auto-fit shrinks the
@@ -1142,7 +1250,15 @@
             ctx, text, millis, "", PW / 2, PH / 2, rpx, digitColor,
             t.accent, t.backgrounds.length > 0, msScale);
       } else {
-        drawClock(ctx, text, PW / 2, PH / 2, digitMetrics(ctx, 95), digitColor, t.backgrounds.length > 0);
+        // A typed format can be far wider than "5:00"; fit it inside the
+        // track, capped at the usual 95 -- mirrors the renderer's typed-
+        // layout fit. Automatic keeps the fixed 95 it always had.
+        var rpx2 = 95;
+        if (t.formatLayout) {
+          var rw2 = clockWidth(text, digitMetrics(ctx, 100));
+          rpx2 = rw2 > 0 ? Math.max(30, Math.min(95, Math.round(100 * 351 / rw2))) : 95;
+        }
+        drawClock(ctx, text, PW / 2, PH / 2, digitMetrics(ctx, rpx2), digitColor, t.backgrounds.length > 0);
       }
     } else if (t.style === "bar") {
       // render: margin 140, top 944, height 16, digits 330px centred at y=500
@@ -1155,7 +1271,13 @@
             ctx, text, millis, "", PW / 2, 250, bpx, digitColor,
             t.accent, t.backgrounds.length > 0, msScale);
       } else {
-        drawClock(ctx, text, PW / 2, 250, digitMetrics(ctx, 165), digitColor, t.backgrounds.length > 0);
+        // Same typed-format fit as the ring above, to the bar's width.
+        var bpx2 = 165;
+        if (t.formatLayout) {
+          var bw2 = clockWidth(text, digitMetrics(ctx, 100));
+          bpx2 = bw2 > 0 ? Math.max(30, Math.min(165, Math.round(100 * 820 / bw2))) : 165;
+        }
+        drawClock(ctx, text, PW / 2, 250, digitMetrics(ctx, bpx2), digitColor, t.backgrounds.length > 0);
       }
       roundRectPath(ctx, 70, 472, PW - 140, 8, 4);
       ctx.fillStyle = TRACK;
@@ -1305,11 +1427,43 @@
     // applyTimerMode() above has already disabled 60 fps past 15
     // minutes: only ever ADD disabled here, never clear it, or that cap
     // would be silently undone.
+    //
+    // Typed format (spec: docs/specs/countdown-format.md): they now appear
+    // only while they can matter -- countdown mode with a format that has
+    // milliseconds -- instead of sitting greyed out. The FORMAT box is the
+    // countdown's switch; Show milliseconds is the clock's.
+    var isClockNow = mode === "clock";
+    $("timer-format-wrap").hidden = isClockNow;
+    $("timer-show-millis-row").hidden = !isClockNow;
+    $("timer-show-millis-hint").hidden = !isClockNow;
+    $("timer-millis-options").hidden = isClockNow || !t.showMillis;
     var millisOff = !t.showMillis;
     $("timer-millis-full-size").disabled = millisOff;
     $("timer-millis-reveal").disabled = millisOff;
     $("timer-millis-reveal-seconds").disabled = millisOff;
     if (millisOff) $("timer-millis-60fps").disabled = true;
+    if (!isClockNow) {
+      var fmtHint = $("timer-format-hint");
+      var startTotal = Math.max(0, t.minutes * 60 + t.seconds);
+      if (t.formatError) {
+        fmtHint.textContent = t.formatError;
+      } else {
+        // Say what it will actually look like -- the operator typed a
+        // shape, and the first frame is the proof it read the way they
+        // meant. Recommend the millis form while the box is empty.
+        var startText = formatClock(startTotal, startTotal, false,
+                                    t.formatLayout) +
+            (t.showMillis ? "." + "000".slice(0, t.msDigits) : "");
+        fmtHint.textContent = "Starts at " + startText + ". " +
+            (t.formatLayout
+                ? "H hours, M minutes, S seconds, .000 milliseconds."
+                : "Leave empty for the usual layout, or type M:SS.000 " +
+                  "for milliseconds.");
+      }
+      fmtHint.classList.toggle("is-bad", !!t.formatError);
+      $("timer-format").setAttribute(
+          "aria-invalid", t.formatError ? "true" : "false");
+    }
     // Smoother milliseconds (60 fps) (spec: docs/specs/millis-60fps.md):
     // the "Show milliseconds" hint just above names a specific fps, so it
     // goes stale the instant that real number changes. Same three-way
@@ -1344,9 +1498,10 @@
       // and fixing only one left a plain timer greyed out.
       var revealSecondsErr = (t.showMillis && t.millisReveal)
           ? validateTimerMillisRevealSeconds() : null;
-      err = durationErr || holdErr || revealSecondsErr || bgErr;
+      err = t.formatError || durationErr || holdErr || revealSecondsErr ||
+          bgErr;
       var hint = $("timer-duration-hint");
-      hint.textContent = durationErr || ($("timer-show-millis").checked ? "5 seconds to 30 minutes with milliseconds" : "5 seconds to 120 minutes");
+      hint.textContent = durationErr || (t.showMillis ? "5 seconds to 30 minutes with milliseconds" : "5 seconds to 120 minutes");
       hint.classList.toggle("is-bad", !!durationErr);
       var holdHint = $("timer-hold-hint");
       holdHint.textContent = holdErr ||
@@ -1423,10 +1578,13 @@
         // Addendum (v1.23.0): accepted (and defaults false) in countdown
         // payloads too now — see _validate_countdown_options in app.py.
         show_millis: t.showMillis,
-        fixed_format: t.fixedFormat,
+        // Typed format (spec: docs/specs/countdown-format.md): "" means
+        // automatic. When set, the server derives show_millis from it
+        // too, so the two can never disagree.
+        display_format: t.displayFormat,
         // Full-size / Hold-at-zero millis (spec: docs/specs/millis-reveal.md):
-        // countdown-only, like fixed_format just above -- never sent in the
-        // clock branch above.
+        // countdown-only, like display_format just above -- never sent in
+        // the clock branch above.
         millis_full_size: t.millisFullSize,
         millis_reveal: t.millisReveal,
         // Only the operator's value while it is in use; otherwise the
