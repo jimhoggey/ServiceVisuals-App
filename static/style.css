@@ -427,6 +427,63 @@ button.tile:active { transform: translateY(0); }
 }
 #timer-beat-mine { margin-top: 12px; }
 .beat-mine-row { gap: 14px; }
+/* Waveform trimmer. The canvas is sized in JS (width from the panel,
+   backing store from devicePixelRatio); CSS only fixes the height so the
+   layout doesn't jump while the sound decodes. touch-action none keeps a
+   finger drag from scrolling the page instead of moving the window. */
+.beat-wave-block { margin-top: 12px; }
+.beat-wave {
+  display: block;
+  width: 100%;
+  height: 84px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.beat-wave-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.beat-play { padding: 8px 14px; min-width: 96px; }
+.beat-wave-wrap { position: relative; }
+/* Covers the canvas while the sound is fetched and decoded, so the volunteer
+   sees "loading", not an empty box that looks broken (and can't be dragged
+   before there is anything to drag). */
+.beat-wave-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.beat-wave-loading[hidden] { display: none; }
+.beat-wave-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.beat-wave-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.beat-wave-short {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+.beat-wave-cap { margin: 6px 0 0; }
+/* The detected note is about to change (a drag or a save is in flight),
+   so the key line under it is dimmed rather than shown as current. */
+#timer-beat-sound-note.is-pending { opacity: 0.45; }
+
 /* Amber, not red: a note that differs from the key is worth a second look
    but never blocks the export. */
 .hint.is-warn { color: var(--accent); }

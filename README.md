@@ -74,9 +74,12 @@ contain a file path). The full list of events lives in [`stats.py`](stats.py).
      0:00 lands on a beat and the band comes in in time and in tune
      (classic look, 60 fps, the only export with sound, up to 15 minutes).
      Choose **MY SOUND** to upload your band's own pad or hit (WAV, MP3 or
-     M4A, up to 4 seconds used) — it plays as recorded on every cut, and
-     the app tells you which note it's in so you can match the song's key.
-     It's kept in `~/.service-visuals` and never leaves your computer.
+     M4A) — then drag the window on its waveform to pick the part that
+     plays (up to two beats, so what you pick is exactly what plays) and
+     press ▶ PLAY to hear it. It plays as recorded on every cut, and the
+     app tells you which note it's in so you can match the song's key.
+     It never leaves your computer, and it's cleared each time you open
+     the app or the countdown, so an old sound never turns up by surprise.
      With milliseconds in the format there are three more
      Countdown-only options: **Full-size milliseconds** draws the `.000`
      at the same size as the main digits (the whole timer is drawn a

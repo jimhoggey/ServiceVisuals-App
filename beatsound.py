@@ -27,13 +27,29 @@ SOUND_DIR = os.path.join(
     os.environ.get("SERVICE_VISUALS_CONFIG") or
     os.path.join(os.path.expanduser("~"), ".service-visuals"),
     "beat-sound")
+# The whole uploaded sound (waveform trimmer, docs/specs/beat-opener.md):
+# kept untrimmed so the volunteer can pick any part of it later.
+ORIGINAL_PATH = os.path.join(SOUND_DIR, "original.wav")
+# v1.42.0 stored only the trimmed clip, here. Still read when no
+# original.wav exists, so a sound uploaded before the trimmer keeps
+# working; never written any more.
 SOUND_PATH = os.path.join(SOUND_DIR, "sound.wav")
 META_PATH = os.path.join(SOUND_DIR, "sound.json")
 
 SAMPLE_RATE = 44100
 MAX_INPUT_SECONDS = 30      # decode no more than this of whatever arrives
-KEEP_SECONDS = 4.0          # what is kept after the attack
 PEAK = 0.89
+# The selection. 2.0 s is two beats at the slowest BPM (60): the window is
+# capped at the cut, and the UI caps it further at the current BPM.
+MIN_LENGTH = 0.05
+MAX_LENGTH = 2.0
+_FADE_IN = 0.003            # a window starting mid-sound must not click
+_FADE_OUT = 0.03
+
+ERR_NOT_NUMBERS = "Start and length must be numbers."
+ERR_LENGTH = "Choose between 0.05 and 2 seconds of your sound."
+ERR_OUTSIDE = "That part is outside your sound."
+ERR_NO_SOUND = "Upload your sound first."
 
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
@@ -71,22 +87,32 @@ def decode(path):
     return pcm
 
 
-def trim_and_normalise(pcm):
-    """(samples, trimmed): the attack moved to the very start, the first
-    KEEP_SECONDS kept, peak set to PEAK. The trim is what makes the hit
-    land ON the cut: a recording usually starts with a breath of silence,
-    and 100 ms of it would put every hit audibly late."""
+def normalise(pcm):
+    """The whole sound with its peak set to PEAK. Raises SoundError when
+    there is nothing to hear."""
     peak = max(abs(v) for v in pcm) if pcm else 0
     if peak < 33:                                  # about -60 dBFS
         raise SoundError(ERR_SILENT)
-    threshold = 0.05 * peak
-    first = next(i for i, v in enumerate(pcm) if abs(v) >= threshold)
-    first = max(0, first // 2 - int(0.005 * SAMPLE_RATE)) * 2
-    keep = int(KEEP_SECONDS * SAMPLE_RATE) * 2
-    trimmed = len(pcm) - first > keep
-    clip = pcm[first:first + keep]
     gain = PEAK * 32767.0 / peak
-    return array.array("h", (int(v * gain) for v in clip)), trimmed
+    return array.array("h", (int(v * gain) for v in pcm))
+
+
+def attack_start(pcm):
+    """Seconds to the first real sound, less a 5 ms pre-roll: where the
+    selection starts by default. This is what makes the hit land ON the
+    cut -- a recording usually starts with a breath of silence, and 100 ms
+    of it would put every hit audibly late."""
+    peak = max(abs(v) for v in pcm) if pcm else 0
+    threshold = 0.05 * peak
+    first = next((i for i, v in enumerate(pcm) if abs(v) >= threshold), 0)
+    return max(0, first // 2 - int(0.005 * SAMPLE_RATE)) / float(SAMPLE_RATE)
+
+
+def _region(pcm, start, length):
+    """Interleaved samples from `start` for `length` seconds."""
+    first = int(round(start * SAMPLE_RATE)) * 2
+    count = int(round(length * SAMPLE_RATE)) * 2
+    return pcm[first:first + count]
 
 
 def detect_note(pcm, sample_rate=SAMPLE_RATE):
@@ -141,9 +167,51 @@ def detect_note(pcm, sample_rate=SAMPLE_RATE):
     return NOTE_NAMES[order[0]]
 
 
+def _write_wav(path, pcm):
+    tmp = path + ".part"
+    out = array.array("h", pcm)
+    if sys.byteorder != "little":
+        out.byteswap()
+    with wave.open(tmp, "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(out.tobytes())
+    replace_with_retry(tmp, path)
+
+
+def _read_wav(path):
+    with wave.open(path) as w:
+        pcm = array.array("h")
+        pcm.frombytes(w.readframes(w.getnframes()))
+    if sys.byteorder != "little":
+        pcm.byteswap()
+    return pcm
+
+
+def audio_path():
+    """The whole stored sound -- original.wav, or a v1.42.0 sound.wav --
+    or None."""
+    for path in (ORIGINAL_PATH, SOUND_PATH):
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _duration(path):
+    with wave.open(path) as w:
+        return w.getnframes() / float(w.getframerate())
+
+
+def _write_meta(start, length, note):
+    with open(META_PATH, "w") as f:
+        json.dump({"start": start, "length": length, "note": note}, f)
+
+
 def save_upload(stream):
-    """Store an uploaded file-like `stream` as THE beat sound. Returns
-    {"present", "note", "seconds", "trimmed"}; raises SoundError."""
+    """Store an uploaded file-like `stream` as THE beat sound, whole, with
+    the selection starting at its attack. Returns the status() shape plus
+    "trimmed" (the input ran past MAX_INPUT_SECONDS); raises SoundError."""
     os.makedirs(SOUND_DIR, exist_ok=True)
     incoming = os.path.join(SOUND_DIR, "upload.part")
     try:
@@ -153,59 +221,93 @@ def save_upload(stream):
                 if not chunk:
                     break
                 f.write(chunk)
-        samples, trimmed = trim_and_normalise(decode(incoming))
+        pcm = normalise(decode(incoming))
     finally:
         # A lock (Defender scanning the fresh file) must not turn a good
         # upload -- or a plain-English SoundError -- into a 500. A
         # leftover upload.part is harmless: the next upload overwrites it.
         unlink_quietly(incoming)
-    note = detect_note(samples)
-    seconds = round(len(samples) / 2.0 / SAMPLE_RATE, 2)
-    tmp = SOUND_PATH + ".part"
-    out = array.array("h", samples)
-    if sys.byteorder != "little":
-        out.byteswap()
-    with wave.open(tmp, "wb") as w:
-        w.setnchannels(2)
-        w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
-        w.writeframes(out.tobytes())
-    replace_with_retry(tmp, SOUND_PATH)
-    with open(META_PATH, "w") as f:
-        json.dump({"note": note, "seconds": seconds}, f)
-    return {"present": True, "note": note, "seconds": seconds,
-            "trimmed": trimmed}
+    duration = len(pcm) / 2.0 / SAMPLE_RATE
+    start = round(attack_start(pcm), 3)
+    length = round(max(MIN_LENGTH, min(MAX_LENGTH, duration - start)), 3)
+    _write_wav(ORIGINAL_PATH, pcm)
+    unlink_quietly(SOUND_PATH)        # a v1.42.0 clip no longer applies
+    _write_meta(start, length, detect_note(_region(pcm, start, length)))
+    result = status()
+    result["trimmed"] = duration >= MAX_INPUT_SECONDS - 0.01
+    return result
+
+
+def set_selection(start, length):
+    """Store a new selection; the note is re-detected on that part.
+    Returns the status() shape; raises SoundError."""
+    path = audio_path()
+    if path is None:
+        raise SoundError(ERR_NO_SOUND)
+    numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                  and v == v for v in (start, length))   # v == v: not NaN
+    if not numbers:
+        raise SoundError(ERR_NOT_NUMBERS)
+    if not MIN_LENGTH - 1e-9 <= length <= MAX_LENGTH + 1e-9:
+        raise SoundError(ERR_LENGTH)
+    duration = _duration(path)
+    if start < 0 or start + length > duration + 0.002:
+        raise SoundError(ERR_OUTSIDE)
+    start, length = round(start, 3), round(length, 3)
+    pcm = _read_wav(path)
+    _write_meta(start, length, detect_note(_region(pcm, start, length)))
+    return status()
 
 
 def status():
-    """{"present": False} or {"present", "note", "seconds"}."""
-    if not os.path.isfile(SOUND_PATH):
+    """{"present": False}, or {"present", "note", "seconds" (the
+    selection's length), "start", "duration" (the whole sound's)}."""
+    path = audio_path()
+    if path is None:
         return {"present": False}
     try:
         with open(META_PATH) as f:
             meta = json.load(f)
     except (OSError, ValueError):
         meta = {}
+    duration = round(_duration(path), 3)
+    start = meta.get("start")
+    length = meta.get("length")
+    if not isinstance(start, (int, float)) or \
+            not isinstance(length, (int, float)):
+        # A v1.42.0 sound: its clip is already trimmed to the attack.
+        start, length = 0.0, round(min(MAX_LENGTH, duration), 3)
     note = meta.get("note") if meta.get("note") in NOTE_NAMES else None
-    seconds = meta.get("seconds")
-    return {"present": True, "note": note,
-            "seconds": seconds if isinstance(seconds, (int, float)) else None}
+    return {"present": True, "note": note, "seconds": length,
+            "start": start, "duration": duration}
 
 
 def remove():
-    for path in (SOUND_PATH, META_PATH):
-        if os.path.exists(path):
-            os.unlink(path)
+    for path in (ORIGINAL_PATH, SOUND_PATH, META_PATH):
+        unlink_quietly(path)
     return {"present": False}
 
 
 def load():
-    """The stored clip as interleaved stereo samples (array 'h'), or None."""
-    if not os.path.isfile(SOUND_PATH):
+    """The selected part as interleaved stereo samples (array 'h'), with
+    a 3 ms fade-in and a 30 ms fade-out, or None. The render caps it at
+    the next cut as well."""
+    path = audio_path()
+    if path is None:
         return None
-    with wave.open(SOUND_PATH) as w:
-        pcm = array.array("h")
-        pcm.frombytes(w.readframes(w.getnframes()))
-    if sys.byteorder != "little":
-        pcm.byteswap()
-    return pcm
+    info = status()
+    clip = _region(_read_wav(path), info["start"], info["seconds"])
+    frames = len(clip) // 2
+    fade_in = int(_FADE_IN * SAMPLE_RATE)
+    fade_out = int(_FADE_OUT * SAMPLE_RATE)
+    out = array.array("h", clip)
+    for j in range(frames):
+        g = 1.0
+        if j < fade_in:
+            g = j / float(fade_in)
+        if j >= frames - fade_out:
+            g = min(g, (frames - j) / float(fade_out))
+        if g < 1.0:
+            out[2 * j] = int(clip[2 * j] * g)
+            out[2 * j + 1] = int(clip[2 * j + 1] * g)
+    return out

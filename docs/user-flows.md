@@ -348,6 +348,33 @@ Rule confirmed: when an option changes where a value comes from (your
 own file instead of the built-in), every nearby hint that explains the
 old source changes or hides with it.
 
+**Waveform trimmer** (after v1.42.0; the owner: "like the Instagram audio
+… you can scroll, and also you can trim the amount that plays"). The whole
+sound is kept; a gold window picks the part that plays, capped at two
+beats so what is selected is exactly what plays. ▶ PLAY previews it.
+- Fixed before release (scoped review): the cap was silent — the edge
+  stopped short of the mouse with no reason, and read as broken; a BPM
+  rise shortened the window without a word; the saved sound wasn't
+  selected after a reload; handles were ~5 px and a short window a 4 px
+  sliver; "1.0 s" showed for a 0.96 s cap; no sign of what PLAY was
+  playing; the status lagged the label while dragging; the empty
+  waveform looked broken while loading; the note changing with the
+  window was unexplained. All addressed: a "Longest part … two beats at
+  N BPM" line that lights up at the cap, a "Shortened to …" note, MY
+  SOUND preselected when a sound is stored, 12 px grab areas and grips,
+  two-decimal times, a moving playhead, live status, "Loading your
+  sound…", and "(detected from the part you've selected)".
+
+- The owner, after testing: an uploaded sound from a previous session
+  turning up was unwelcome. It now lasts one visit: cleared on app start,
+  page load and every time the countdown is opened, and SOUND returns to
+  BUILT-IN TONE (so the "preselect MY SOUND" fix above was dropped). An
+  export already pressed keeps its sound.
+
+Rule confirmed: when a control clamps what the operator drags or types,
+the screen says what the limit is and why, next to the control, before
+they hit it. A silent clamp reads as a broken control.
+
 **Found, not yet fixed**
 - With a 16-minute timer and the opener on, the preview still draws
   16:00:000 as if valid; the error sits under the duration (Export is

@@ -2973,8 +2973,9 @@ def check_beat_sound():
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(wav_bytes(freqs, **kw).read())
-            pcm, _ = beatsound.trim_and_normalise(beatsound.decode(tmp))
-            return beatsound.detect_note(pcm)
+            pcm = beatsound.normalise(beatsound.decode(tmp))
+            return beatsound.detect_note(beatsound._region(
+                pcm, beatsound.attack_start(pcm), 2.0))
         finally:
             os.unlink(tmp)
 
@@ -3008,22 +3009,73 @@ def check_beat_sound():
                        data={"sound": (wav_bytes([440, 880], seconds=6.0,
                                                  lead=0.25), "pad.wav")})
     body = resp.get_json()
-    check("a good upload is stored with its note and length",
+    # Waveform trimmer: the WHOLE sound is kept (6.25 s here) and the
+    # selection starts at the attack -- 0.25 s of silence went in, less
+    # the 5 ms pre-roll -- capped at 2 s, two beats at the slowest BPM.
+    check("a good upload keeps the whole sound, selection at the attack",
           resp.status_code == 200 and body["note"] == "A"
-          and body["seconds"] == 4.0 and body["trimmed"] is True,
+          and abs(body["duration"] - 6.25) < 0.01
+          and abs(body["start"] - 0.245) < 0.002
+          and body["seconds"] == 2.0 and body["trimmed"] is False,
           repr(body))
-    # 0.25 s of silence went in; the stored clip keeps only a 5 ms
-    # pre-roll, so its first 20 ms already hold the attack.
-    with wave.open(beatsound.SOUND_PATH) as w:
-        stored = array.array("h")
-        stored.frombytes(w.readframes(int(0.02 * 44100)))
-    if sys.byteorder != "little":
-        stored.byteswap()
-    check("the leading silence was trimmed (the attack is at the start)",
-          max(abs(v) for v in stored) > 1000, str(max(stored)))
-    check("GET reports the stored sound",
-          client.get("/api/beat-sound").get_json()
-          == {"present": True, "note": "A", "seconds": 4.0})
+    got = client.get("/api/beat-sound").get_json()
+    check("GET reports the stored sound and its selection",
+          got == {"present": True, "note": "A", "seconds": 2.0,
+                  "start": body["start"], "duration": body["duration"]},
+          repr(got))
+    audio = client.get("/api/beat-sound/audio")
+    check("the whole sound is served for the waveform and preview",
+          audio.status_code == 200 and audio.mimetype == "audio/wav"
+          and audio.data[:4] == b"RIFF", "{0} {1}".format(
+              audio.status_code, audio.mimetype))
+    audio.close()
+
+    # Choosing a part: the note is re-detected on that part. A sound
+    # that is A for 1.5 s, then C# -- select the C# part.
+    two = wav_bytes([440, 880], seconds=1.5, lead=0.0)
+    with wave.open(two) as w:
+        first = w.readframes(w.getnframes())
+    tail = wav_bytes([554.37], seconds=1.5, lead=0.0)
+    with wave.open(tail) as w:
+        second = w.readframes(w.getnframes())
+    joined = io.BytesIO()
+    with wave.open(joined, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(44100)
+        w.writeframes(first + second)
+    joined.seek(0)
+    resp = client.post("/api/beat-sound", content_type="multipart/form-data",
+                       data={"sound": (joined, "two.wav")})
+    check("a two-part sound starts out as its first note",
+          resp.get_json()["note"] == "A", repr(resp.get_json()))
+    resp = client.put("/api/beat-sound", json={"start": 1.8, "length": 0.8})
+    picked = resp.get_json()
+    check("choosing the second part re-detects its note",
+          resp.status_code == 200 and picked["note"] == "C#"
+          and picked["start"] == 1.8 and picked["seconds"] == 0.8,
+          repr(picked))
+    for payload, message in (
+            ({"start": "1", "length": 0.5}, beatsound.ERR_NOT_NUMBERS),
+            ({"start": True, "length": 0.5}, beatsound.ERR_NOT_NUMBERS),
+            ({"start": 0.0, "length": 2.5}, beatsound.ERR_LENGTH),
+            ({"start": 0.0, "length": 0.01}, beatsound.ERR_LENGTH),
+            ({"start": 2.8, "length": 0.5}, beatsound.ERR_OUTSIDE),
+            ({"start": -0.1, "length": 0.5}, beatsound.ERR_OUTSIDE)):
+        resp = client.put("/api/beat-sound", json=payload)
+        check("selection refused: {0}".format(message),
+              resp.status_code == 400 and resp.get_json()["error"] == message,
+              repr(resp.get_json()))
+    clip = beatsound.load()
+    check("the render gets exactly the selected part, faded at both ends",
+          len(clip) == int(round(0.8 * 44100)) * 2
+          and clip[0] == 0 and abs(clip[-1]) < 600,
+          "{0} samples, ends {1} / {2}".format(len(clip), clip[0], clip[-1]))
+
+    # Put the long A pad back for the render below.
+    client.post("/api/beat-sound", content_type="multipart/form-data",
+                data={"sound": (wav_bytes([440, 880], seconds=6.0,
+                                          lead=0.25), "pad.wav")})
 
     base = {"minutes": 0, "seconds": 5, "beat_opener": True, "bpm": 125,
             "key": "A"}
@@ -3069,8 +3121,62 @@ def check_beat_sound():
         if os.path.exists(path):
             os.unlink(path)
 
+    # The sound is cleared whenever the countdown is reopened, so Export
+    # must snapshot it into the job: clearing it while the job waits in
+    # the queue must not change what that export plays.
+    captured = {}
+    real_submit = _app.jobs.submit
+    _app.jobs.submit = lambda kind, opts: captured.update(opts) or "x"
+    try:
+        client.post("/api/render", json={
+            "type": "timer", "options": dict(base, beat_sound="mine")})
+    finally:
+        _app.jobs.submit = real_submit
+    snap = captured.get("_own_sound")
+    check("Export snapshots your sound into the job",
+          snap is not None and len(snap) == len(beatsound.load()),
+          "no snapshot" if snap is None else str(len(snap)))
+    beatsound.remove()
+    check("clearing it afterwards leaves the job's copy intact",
+          captured.get("_own_sound") is snap and len(snap) > 0)
+    client.post("/api/beat-sound", content_type="multipart/form-data",
+                data={"sound": (wav_bytes([440, 880], seconds=2.0),
+                                "pad.wav")})
+
     check("DELETE removes it",
           client.delete("/api/beat-sound").get_json() == {"present": False})
+    gone = client.get("/api/beat-sound/audio")
+    check("no audio is served once it's removed", gone.status_code == 404)
+    resp = client.put("/api/beat-sound", json={"start": 0, "length": 0.5})
+    check("choosing a part with nothing stored is refused",
+          resp.status_code == 400
+          and resp.get_json()["error"] == beatsound.ERR_NO_SOUND)
+
+    # A sound saved by v1.42.0 -- trimmed sound.wav, no original.wav, old
+    # metadata -- still works: the whole clip is the original, selection
+    # from 0 for up to 2 s.
+    os.makedirs(beatsound.SOUND_DIR, exist_ok=True)
+    legacy = array.array("h", [0, 0] * int(1.2 * 44100))
+    for k in range(len(legacy) // 2):
+        v = int(6000 * math.sin(2 * math.pi * 440 * k / 44100))
+        legacy[2 * k] = legacy[2 * k + 1] = v
+    if sys.byteorder != "little":
+        legacy.byteswap()
+    with wave.open(beatsound.SOUND_PATH, "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(44100)
+        w.writeframes(legacy.tobytes())
+    with open(beatsound.META_PATH, "w") as f:
+        json.dump({"note": "A", "seconds": 1.2}, f)
+    got = beatsound.status()
+    check("a v1.42.0 sound still loads, selection 0 to its end",
+          got == {"present": True, "note": "A", "seconds": 1.2,
+                  "start": 0.0, "duration": 1.2}
+          and len(beatsound.load()) == int(1.2 * 44100) * 2, repr(got))
+    beatsound.remove()
+    check("removing clears a v1.42.0 sound too",
+          beatsound.status() == {"present": False})
     try:
         validate_timer_options(dict(base, beat_sound="mine"))
         check("'mine' with nothing stored is refused", False, "no error")

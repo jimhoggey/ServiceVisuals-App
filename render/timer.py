@@ -1361,12 +1361,16 @@ def render_timer(options, progress_cb):
     if opener:
         own = None
         if options.get("beat_sound") == "mine":
-            # Imported here: the stored clip lives with the user's data
-            # (~/.service-visuals), outside the render package. Validation
-            # already refused "mine" with nothing stored; if it vanished
-            # since, the built-in tone is a better export than a failure.
-            import beatsound
-            own = beatsound.load()
+            # /api/render snapshots the clip into the job when Export is
+            # pressed, because the stored sound is cleared whenever the
+            # countdown is reopened. A caller that didn't (smoke, scripts)
+            # reads the stored one. Imported here: it lives with the
+            # user's data (~/.service-visuals), outside the render package.
+            # Gone entirely: the built-in tone beats a failed export.
+            own = options.get("_own_sound")
+            if own is None:
+                import beatsound
+                own = beatsound.load()
         try:
             beat.add_sound(out_path, total, bpm, key,
                            total_frames / float(fps), own_sound=own)

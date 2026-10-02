@@ -571,6 +571,24 @@
                     <input class="vh" type="file" id="timer-beat-sound-file" accept="audio/*,.wav,.mp3,.m4a">
                     <button type="button" class="link-btn" id="timer-beat-sound-remove" hidden>REMOVE</button>
                   </div>
+                  <!-- Waveform trimmer (spec addendum): drag the window to
+                       slide it, drag an edge to trim it. timer.js draws the
+                       canvas and shows this block only while a sound is
+                       stored. -->
+                  <div class="beat-wave-block" id="timer-beat-wave-block" hidden>
+                    <div class="beat-wave-wrap">
+                      <canvas id="timer-beat-wave" class="beat-wave" height="84" role="img" aria-label="Waveform of your sound. Drag the highlighted part to move it, or drag its edges to change how much plays."></canvas>
+                      <div class="beat-wave-loading" id="timer-beat-wave-loading" hidden>Loading your sound&#8230;</div>
+                    </div>
+                    <div class="beat-wave-row">
+                      <button type="button" class="btn beat-play" id="timer-beat-play">&#9654; PLAY</button>
+                      <div class="beat-wave-text">
+                        <span class="beat-wave-label" id="timer-beat-wave-label"></span>
+                        <span class="beat-wave-short" id="timer-beat-wave-short" hidden></span>
+                      </div>
+                    </div>
+                    <p class="hint beat-wave-cap" id="timer-beat-wave-cap"></p>
+                  </div>
                   <p class="hint" id="timer-beat-sound-status" role="status"></p>
                   <p class="hint" id="timer-beat-sound-note" hidden></p>
                   <p class="hint">A pad or a single hit works best. It plays as recorded on every beat, so it should already be in the song's key.</p>

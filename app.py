@@ -21,6 +21,7 @@ from flask import (Flask, jsonify, request, send_file, send_from_directory)
 from flask.signals import got_request_exception
 from PIL import Image
 
+import beatsound
 import stats
 import updater
 import whatsnew
@@ -373,6 +374,15 @@ def api_render():
     except ValidationError as exc:
         return jsonify({"error": str(exc)}), 400
 
+    if visual_type == "timer" and clean_options.get("beat_opener") and \
+            clean_options.get("beat_sound") == "mine":
+        # The uploaded sound is cleared whenever the countdown is opened
+        # (the owner: an old session's sound must never turn up). Snapshot
+        # the selected part into the job NOW, so clearing it while this
+        # export waits in the queue or renders can't change what it plays.
+        # In memory only: job options are never serialised.
+        clean_options["_own_sound"] = beatsound.load()
+
     job_id = jobs.submit(visual_type, clean_options)
     return jsonify({"job_id": job_id}), 202
 
@@ -547,6 +557,11 @@ def prepare_exports_dir():
     # (docs/specs/whats-new.md's row 4 must not depend on that).
     whatsnew.seed_if_fresh_install(APP_VERSION)
     os.makedirs(EXPORTS_DIR, exist_ok=True)
+    # The beat opener's uploaded sound lasts one session (the owner: a
+    # sound from a previous session must never turn up). The page clears
+    # it too, on load and on opening the countdown; this covers an app
+    # that quit before any page loaded.
+    beatsound.remove()
     updater.sweep_backups()
     stats.start(APP_VERSION)
     stats.report_previous_boot()     # also arms the marker for this boot

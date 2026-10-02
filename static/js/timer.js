@@ -63,9 +63,17 @@
   // used." would vanish a moment after it appeared. `error` is the last
   // upload or remove failure, shown in place of the status until the
   // operator does something else.
+  // Waveform trimmer (spec addendum): `start` is where the selected part
+  // begins in the whole sound, `seconds` is how long it is (the server's
+  // name for the selection length), `duration` is the whole original.
+  // `audioGen` counts uploads so a replacement of the same length still
+  // re-fetches the waveform.
   var beatSound = { present: false, note: null, seconds: 0, trimmed: false,
+                    start: 0, duration: 0, audioGen: 0,
                     busy: false, error: "" };
   var BEAT_SOUND_UPLOAD_FAILED = "Couldn't upload that sound — try again.";
+  var BEAT_SOUND_SAVE_FAILED = "Couldn't save that part of your sound — " +
+      "try again.";
   var BEAT_SOUND_MISSING = "Upload your sound first, or switch back to " +
       "the built-in tone.";
 
@@ -100,6 +108,8 @@
     beatSound.present = !!(j && j.present);
     beatSound.note = beatSound.present && j.note ? j.note : null;
     beatSound.seconds = beatSound.present ? (j.seconds || 0) : 0;
+    beatSound.start = beatSound.present ? (j.start || 0) : 0;
+    beatSound.duration = beatSound.present ? (j.duration || 0) : 0;
     if (!beatSound.present) beatSound.trimmed = false;
   }
 
@@ -108,14 +118,35 @@
       .then(function (r) { return r.ok ? r.json() : { present: false }; })
       .catch(function () { return { present: false }; })
       .then(function (j) {
+        // A reply that was already on its way must not yank the window
+        // out from under a drag in progress; the drag saves on release.
+        if (wave.drag) return;
         applyBeatSoundState(j);
         updateTimer();
       });
   }
 
+  // The uploaded sound lasts one visit to the countdown: cleared when the
+  // page loads and every time the Timer tile is opened (the owner: "it
+  // holds the sound from the previous session"). SOUND goes back to the
+  // built-in tone, so a cleared MY SOUND can't leave Export blocked. An
+  // export already queued keeps its sound -- /api/render snapshots it
+  // when Export is pressed -- but don't clear under one that is still
+  // running from this page, so its result still matches what's shown.
+  function clearBeatSound() {
+    if (exportBusy["timer"] || beatSound.busy) return null;
+    stopPlayback();
+    $("timer-beat-sound-builtin").checked = true;
+    beatSound.error = "";
+    return fetch("/api/beat-sound", { method: "DELETE" })
+      .catch(function () { /* the server clears on start-up as well */ })
+      .then(function () { return refreshBeatSound(); });
+  }
+
   function uploadBeatSound(file) {
     var fd = new FormData();
     fd.append("sound", file);
+    stopPlayback();
     beatSound.busy = true;
     beatSound.error = "";
     updateTimer();
@@ -128,6 +159,8 @@
           }
           applyBeatSoundState(j);
           beatSound.trimmed = !!j.trimmed;
+          // A new file: the waveform must be fetched and decoded again.
+          beatSound.audioGen += 1;
         });
       })
       .catch(function () { beatSound.error = BEAT_SOUND_UPLOAD_FAILED; })
@@ -139,6 +172,7 @@
   }
 
   function removeBeatSound() {
+    stopPlayback();
     beatSound.busy = true;
     beatSound.error = "";
     updateTimer();
@@ -156,10 +190,10 @@
   }
 
   // Status line, the note under it, and REMOVE. Called from updateTimer().
-  function renderBeatSound() {
+  // Just the status line. Split out so a drag can refresh the length live,
+  // in step with the label under the waveform.
+  function renderBeatSoundStatus() {
     var status = $("timer-beat-sound-status");
-    var noteEl = $("timer-beat-sound-note");
-    var key = $("timer-key").value || "A";
     var text, bad = false;
     if (beatSound.busy) {
       text = "Uploading…";
@@ -169,10 +203,13 @@
     } else if (beatSound.present) {
       // Says it WILL play, not just what the file is: the highlighted
       // segment was the only other sign of which sound gets exported.
+      // The note is read from the selected part and moves with it, which
+      // nobody would guess without being told.
       text = "Your sound plays on every beat: " +
-          beatSound.seconds.toFixed(1) + " s" +
-          (beatSound.note ? ", in " + noteLabel(beatSound.note) : "") + ".";
-      if (beatSound.trimmed) text += " Only the first 4 seconds are used.";
+          floor2(beatSound.seconds).toFixed(2) + " s" +
+          (beatSound.note ? ", in " + noteLabel(beatSound.note) +
+              " (detected from the part you've selected)" : "") + ".";
+      if (beatSound.trimmed) text += " Only the first 30 seconds were kept.";
     } else {
       // Empty: the instruction line below already says what to do, and
       // a second "no sound yet" line just repeated it.
@@ -181,6 +218,12 @@
     status.textContent = text;
     status.hidden = !text;
     status.classList.toggle("is-bad", bad);
+  }
+
+  function renderBeatSound() {
+    var noteEl = $("timer-beat-sound-note");
+    var key = $("timer-key").value || "A";
+    renderBeatSoundStatus();
 
     // One line under the status, most urgent first: the blocking error,
     // then the two key warnings (which never block).
@@ -213,8 +256,556 @@
     noteEl.hidden = !line;
     noteEl.classList.toggle("is-bad", cls === "is-bad");
     noteEl.classList.toggle("is-warn", cls === "is-warn");
+    syncNotePending();
     $("timer-beat-sound-remove").hidden = !beatSound.present;
     $("timer-beat-sound-remove").disabled = beatSound.busy;
+    // The trimmer is extra: whatever goes wrong inside it must never stop
+    // updateTimer() from reaching the Export button below.
+    try { renderWave(); } catch (e) { /* the sound still works unseen */ }
+  }
+
+  // ---- waveform trimmer (spec: docs/specs/beat-opener.md, addendum) -------
+  // The whole original sound is drawn as a waveform with a window on it:
+  // drag the window to slide it, drag an edge to trim it. The window can
+  // never be longer than two beats (120 / BPM s) or 2 s, so what is
+  // selected is exactly what the export plays on every cut. The server
+  // keeps the truth (PUT /api/beat-sound on release); the browser decodes
+  // GET /api/beat-sound/audio for both the picture and the preview.
+  var WAVE_PEAK_COLS = 2400;   // peaks are computed once, then resampled
+  // Grab zone around a window edge, CSS px. Wide on purpose: the edge bars
+  // are thin, and a volunteer aiming at one with a mouse missed at 8.
+  var WAVE_EDGE_PX = 12;
+  // The window is never DRAWN narrower than this, so a 0.05 s selection of
+  // a long sound is still a visible, grabbable box, not a hairline.
+  var WAVE_MIN_DRAWN_PX = 10;
+  var SEL_MIN = 0.05;          // seconds, same as the server's range
+  var SEL_MAX = 2.0;
+  var WAVE_MUTED = "#5d626b";
+  var WAVE_ACCENT = "#e8b44f";       // --accent: canvas can't read CSS vars
+  var WAVE_FILL = "rgba(232, 180, 79, 0.16)";
+  var WAVE_GRIP = "#191305";         // --accent-ink
+  var WAVE_HEAD = "#e9e7e2";         // --ink: not the accent, so it can't
+                                     // be mistaken for an edge handle
+  var PLAY_LABEL = "▶ PLAY";
+  var STOP_LABEL = "■ STOP";
+  // key: which sound is loaded (duration|upload count); failedKey stops a
+  // sound the browser can't decode from being re-fetched on every redraw.
+  var wave = { key: "", failedKey: "", token: 0, ctx: null, buffer: null,
+               mins: null, maxs: null, peak: 1, ver: 0, drawn: "",
+               drag: null, source: null, playing: false, saveToken: 0,
+               saveTimer: null, saving: false,
+               // set when a BPM change cut the window: {len, bpm}
+               shortened: null,
+               // playhead: raf handle, when the audio clock started, how
+               // long it plays, and the sound-time it is at (null = idle)
+               raf: 0, t0: 0, len: 0, head: null };
+
+  function r3(v) { return Math.round(v * 1000) / 1000; }
+  function floor3(v) { return Math.floor(v * 1000 + 1e-6) / 1000; }
+  // Shown lengths round DOWN: the 0.96 s cap must never read as 1.0 s.
+  function floor2(v) { return Math.floor(v * 100 + 1e-6) / 100; }
+
+  // The server's duration may be rounded up a hair; a window ending past
+  // the true end would be refused ("outside your sound"), so stay under.
+  function waveDuration() {
+    var d = beatSound.duration || (wave.buffer ? wave.buffer.duration : 0);
+    return floor3(d);
+  }
+
+  // Longest window allowed right now. BPM from the box, 120 while it holds
+  // something the export would refuse anyway (the box is still being typed).
+  function waveBpm() {
+    var bpm = intFrom($("timer-bpm"));
+    if (bpm === null || bpm < 60 || bpm > 200) bpm = 120;
+    return bpm;
+  }
+
+  function waveMaxLen() {
+    return Math.min(SEL_MAX, 120 / waveBpm(), waveDuration());
+  }
+
+  function getAudioCtx() {
+    if (!wave.ctx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      try { wave.ctx = new AC(); } catch (e) { return null; }
+    }
+    return wave.ctx;
+  }
+
+  // Callback form too: older WebKit has no promise version of this call.
+  function decodeAudio(ab) {
+    return new Promise(function (resolve, reject) {
+      var ctx = getAudioCtx();
+      if (!ctx) { reject(new Error("no audio")); return; }
+      var p = ctx.decodeAudioData(ab, resolve, reject);
+      if (p && typeof p.then === "function") p.then(null, function () {});
+    });
+  }
+
+  function computePeaks(buf) {
+    var cols = WAVE_PEAK_COLS, n = buf.length;
+    var mins = [], maxs = [];
+    var chans = [], c, i, j;
+    for (c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
+    var per = n / cols, peak = 0;
+    for (i = 0; i < cols; i++) {
+      var a = Math.floor(i * per);
+      var b = Math.max(a + 1, Math.floor((i + 1) * per));
+      var mn = 0, mx = 0;
+      for (c = 0; c < chans.length; c++) {
+        var d = chans[c];
+        for (j = a; j < b && j < n; j++) {
+          var v = d[j];
+          if (v < mn) mn = v;
+          if (v > mx) mx = v;
+        }
+      }
+      mins[i] = mn; maxs[i] = mx;
+      peak = Math.max(peak, -mn, mx);
+    }
+    wave.mins = mins; wave.maxs = maxs;
+    wave.peak = peak > 0 ? peak : 1;
+  }
+
+  function clearWave() {
+    wave.token += 1;
+    wave.key = "";
+    wave.buffer = null; wave.mins = null; wave.maxs = null;
+    wave.ver += 1;
+    // A new or removed sound: "shortened to fit" was about the old one.
+    wave.shortened = null;
+    stopPlayback();
+  }
+
+  function loadWave(key) {
+    clearWave();
+    wave.key = key;
+    var token = wave.token;
+    fetch("/api/beat-sound/audio", { cache: "no-store" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("audio " + r.status);
+        return r.arrayBuffer();
+      })
+      .then(decodeAudio)
+      .then(function (buf) {
+        if (token !== wave.token) return;       // replaced while decoding
+        wave.buffer = buf;
+        computePeaks(buf);
+        wave.ver += 1;
+        renderWave();
+      })
+      .catch(function () {
+        if (token !== wave.token) return;
+        wave.failedKey = key;
+        renderWave();
+      });
+  }
+
+  function stopPlayback() {
+    var src = wave.source;
+    wave.source = null;
+    wave.playing = false;
+    if (src) {
+      src.onended = null;
+      try { src.stop(); } catch (e) { /* already stopped */ }
+      try { src.disconnect(); } catch (e2) { /* nothing to undo */ }
+    }
+    if (wave.raf) { cancelAnimationFrame(wave.raf); wave.raf = 0; }
+    if (wave.head !== null) { wave.head = null; drawWave(); }
+    syncPlayButton();
+  }
+
+  // Playhead: follows the audio clock, not a timer of our own, so it can't
+  // drift from what is actually heard.
+  function tickPlayhead() {
+    wave.raf = 0;
+    if (!wave.playing || !wave.ctx) return;
+    var el = Math.max(0, Math.min(wave.len, wave.ctx.currentTime - wave.t0));
+    wave.head = beatSound.start + el;
+    drawWave();
+    wave.raf = requestAnimationFrame(tickPlayhead);
+  }
+
+  // Exactly the selected part, with the export's fades: 3 ms in so a window
+  // that starts mid-sound doesn't click, 30 ms out at its end.
+  function startPlayback() {
+    var ctx = getAudioCtx();
+    if (!ctx || !wave.buffer) return;
+    stopPlayback();
+    try {
+      // A browser may hold a new context suspended until a click; this is
+      // inside one.
+      if (ctx.state === "suspended" && ctx.resume) ctx.resume();
+      var len = Math.min(beatSound.seconds, waveMaxLen());
+      var t0 = ctx.currentTime + 0.01;
+      var src = ctx.createBufferSource();
+      src.buffer = wave.buffer;
+      var g = ctx.createGain();
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(1, t0 + 0.003);
+      g.gain.setValueAtTime(1, t0 + Math.max(0.003, len - 0.03));
+      g.gain.linearRampToValueAtTime(0, t0 + len);
+      src.connect(g);
+      g.connect(ctx.destination);
+      src.onended = function () {
+        if (wave.source === src) {
+          wave.source = null;
+          wave.playing = false;
+          stopPlayback();       // clears the playhead and the button
+        }
+      };
+      src.start(t0, beatSound.start, len);
+      wave.source = src;
+      wave.playing = true;
+      wave.t0 = t0;
+      wave.len = len;
+      wave.raf = requestAnimationFrame(tickPlayhead);
+    } catch (e) {
+      wave.source = null;
+      wave.playing = false;
+    }
+    syncPlayButton();
+  }
+
+  function syncPlayButton() {
+    var btn = $("timer-beat-play");
+    btn.textContent = wave.playing ? STOP_LABEL : PLAY_LABEL;
+    btn.disabled = !wave.buffer;
+  }
+
+  function waveLabelText() {
+    if (!(beatSound.present && beatSound.seconds > 0)) return "";
+    var from = beatSound.start, to = beatSound.start + beatSound.seconds;
+    // Two decimals: at one, the 0.96 s cap read as "1.0 s". The length is
+    // rounded down, like the cap line, so it can never read above the cap.
+    return "From " + from.toFixed(2) + " s to " + to.toFixed(2) + " s — " +
+        floor2(beatSound.seconds).toFixed(2) + " s";
+  }
+
+  // The always-visible reason for the limit, and a warning colour while
+  // the window is sitting on it -- hitting the cap used to feel like a
+  // stuck drag.
+  function renderWaveCap() {
+    var capEl = $("timer-beat-wave-cap");
+    var bpm = waveBpm(), dur = waveDuration();
+    var beats = Math.min(SEL_MAX, 120 / bpm);
+    var cap = Math.min(beats, dur), text;
+    if (dur < beats) {
+      text = "Longest part: " + floor2(cap).toFixed(2) +
+          " s — all of your sound.";
+    } else if (120 / bpm >= SEL_MAX) {
+      text = "Longest part: " + floor2(cap).toFixed(2) +
+          " s — the most the app uses.";
+    } else {
+      text = "Longest part: " + floor2(cap).toFixed(2) + " s — two beats " +
+          "at " + bpm + " BPM. Lower the BPM for a longer part.";
+    }
+    capEl.textContent = text;
+    capEl.classList.toggle("is-warn", beatSound.seconds >= floor3(cap) - 0.0005);
+  }
+
+  // Label, "shortened" note and cap line: all follow the local selection,
+  // so they are redrawn on every drag move too.
+  function renderWaveText() {
+    var key = beatSound.duration + "|" + beatSound.audioGen;
+    $("timer-beat-wave-label").textContent =
+        wave.failedKey && wave.failedKey === key
+        ? "Couldn't draw the waveform. " + waveLabelText()
+        : waveLabelText();
+    // Said only while it is true of the BPM now in the box.
+    var sh = wave.shortened, shEl = $("timer-beat-wave-short");
+    var showSh = !!sh && sh.bpm === waveBpm();
+    shEl.hidden = !showSh;
+    shEl.textContent = showSh ? "Shortened to " + floor2(sh.len).toFixed(2) +
+        " s to fit two beats at " + sh.bpm + " BPM." : "";
+    renderWaveCap();
+  }
+
+  // Dim the key line while the note under it is about to change: a drag in
+  // progress, a BPM-shortening save waiting, or a save in flight.
+  function syncNotePending() {
+    $("timer-beat-sound-note").classList.toggle("is-pending",
+        !!(wave.drag || wave.saving || wave.saveTimer));
+  }
+
+  // Edge x positions in the units of `width` (CSS px or device px). A
+  // window narrower than minW is drawn minW wide around its middle, so the
+  // grab target and the drawing always agree.
+  function waveEdges(width, minW) {
+    var dur = waveDuration();
+    if (!(dur > 0)) return null;
+    var sx = beatSound.start / dur * width;
+    var ex = (beatSound.start + beatSound.seconds) / dur * width;
+    if (ex - sx < minW) {
+      var c = (sx + ex) / 2;
+      sx = c - minW / 2;
+      ex = c + minW / 2;
+      if (sx < 0) { ex -= sx; sx = 0; }
+      if (ex > width) { sx -= ex - width; ex = width; }
+    }
+    return { sx: sx, ex: ex };
+  }
+
+  function drawWave() {
+    var cv = $("timer-beat-wave");
+    if ($("timer-beat-wave-block").hidden) return;
+    var cssW = cv.clientWidth, cssH = cv.clientHeight;
+    if (!cssW || !cssH) return;           // laid out hidden; drawn on show
+    var dpr = window.devicePixelRatio || 1;
+    var w = Math.round(cssW * dpr), h = Math.round(cssH * dpr);
+    var sig = [w, h, wave.ver, beatSound.start, beatSound.seconds,
+               beatSound.duration, wave.head].join("|");
+    if (sig === wave.drawn && cv.width === w && cv.height === h) return;
+    var g = cv.getContext("2d");
+    if (!g) return;
+    if (cv.width !== w) cv.width = w;
+    if (cv.height !== h) cv.height = h;
+    wave.drawn = sig;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    var e = waveEdges(w, WAVE_MIN_DRAWN_PX * dpr);   // device px here
+    var mid = h / 2;
+    var x;
+    // Centre line, so a still-decoding or silent sound isn't an empty box.
+    g.fillStyle = WAVE_MUTED;
+    g.fillRect(0, Math.floor(mid), w, 1);
+    if (wave.mins) {
+      var amp = 0.9 * mid / wave.peak, cols = WAVE_PEAK_COLS;
+      var last = "";
+      for (x = 0; x < w; x++) {
+        var a = Math.floor(x / w * cols);
+        var b = Math.max(a + 1, Math.floor((x + 1) / w * cols));
+        var mn = 0, mx = 0;
+        for (var k = a; k < b && k < cols; k++) {
+          if (wave.mins[k] < mn) mn = wave.mins[k];
+          if (wave.maxs[k] > mx) mx = wave.maxs[k];
+        }
+        var inside = e && x + 0.5 >= e.sx && x + 0.5 <= e.ex;
+        var col = inside ? WAVE_ACCENT : WAVE_MUTED;
+        if (col !== last) { g.fillStyle = col; last = col; }
+        var y0 = mid - mx * amp;
+        g.fillRect(x, y0, 1, Math.max(1, mid - mn * amp - y0));
+      }
+    }
+    if (e) {
+      var hw = Math.max(3, Math.round(6 * dpr));    // visible edge handle
+      g.fillStyle = WAVE_FILL;
+      g.fillRect(e.sx, 0, e.ex - e.sx, h);
+      g.fillStyle = WAVE_ACCENT;
+      g.fillRect(e.sx, 0, e.ex - e.sx, Math.max(1, Math.round(dpr)));
+      g.fillRect(e.sx, h - Math.max(1, Math.round(dpr)), e.ex - e.sx,
+                 Math.max(1, Math.round(dpr)));
+      g.fillRect(e.sx, 0, hw, h);
+      g.fillRect(e.ex - hw, 0, hw, h);
+      // Three short dark ticks on each bar -- the usual "grip" -- so the
+      // bars read as handles to drag, not as a playhead.
+      g.fillStyle = WAVE_GRIP;
+      var tw = Math.max(2, hw - Math.round(2 * dpr));    // tick width
+      var th = Math.max(1, Math.round(dpr));             // tick thickness
+      var gap = Math.round(4 * dpr);
+      for (var side = 0; side < 2; side++) {
+        var bx = side === 0 ? e.sx : e.ex - hw;
+        for (var t = -1; t <= 1; t++) {
+          g.fillRect(bx + Math.floor((hw - tw) / 2),
+                     Math.round(mid + t * gap - th / 2), tw, th);
+        }
+      }
+    }
+    if (wave.head !== null && e) {
+      var dur = waveDuration();
+      var hx = Math.round(wave.head / dur * w);
+      var pw = Math.max(1, Math.round(1.5 * dpr));
+      g.fillStyle = WAVE_HEAD;
+      g.fillRect(Math.min(w - pw, hx), 0, pw, h);
+    }
+  }
+
+  // Shows or hides the whole block and keeps it in step. Called from
+  // renderBeatSound() on every updateTimer(), so it has to be cheap.
+  function renderWave() {
+    var block = $("timer-beat-wave-block");
+    var show = beatSoundMineOn() && beatSound.present && !beatSound.busy;
+    block.hidden = !show;
+    if (!beatSound.present) {
+      if (wave.key) clearWave();
+      return;
+    }
+    if (!show) { stopPlayback(); return; }
+
+    // Fetch only when the sound itself changed (new upload or length), not
+    // on every status refresh.
+    var key = beatSound.duration + "|" + beatSound.audioGen;
+    if (key !== wave.key && key !== wave.failedKey) loadWave(key);
+
+    // A BPM change that leaves the window longer than two beats shortens
+    // it. Saved once, shortly after the typing stops, not per keystroke.
+    if (!wave.drag && beatSound.seconds > waveMaxLen() + 0.0005) {
+      beatSound.seconds = floor3(waveMaxLen());
+      // Tell the volunteer why it got shorter -- it happens under their
+      // hands while they type in another box. It stays until they drag or
+      // upload; nothing grows it back by itself.
+      wave.shortened = { len: beatSound.seconds, bpm: waveBpm() };
+      stopPlayback();
+      if (wave.saveTimer) clearTimeout(wave.saveTimer);
+      wave.saveTimer = setTimeout(function () {
+        wave.saveTimer = null;
+        var cap = floor3(waveMaxLen());
+        if (beatSound.present && beatSound.seconds > cap) {
+          beatSound.seconds = cap;
+          wave.shortened = { len: cap, bpm: waveBpm() };
+        }
+        saveBeatSelection();
+      }, 400);
+    }
+
+    // Loading, not an empty box, until the picture exists (a failed decode
+    // is said in the label and leaves the window usable).
+    $("timer-beat-wave-loading").hidden =
+        !(wave.key === key && !wave.buffer && wave.failedKey !== key);
+    renderWaveText();
+    syncPlayButton();
+    drawWave();
+  }
+
+  function saveBeatSelection() {
+    var token = wave.saveToken += 1;
+    beatSound.error = "";
+    wave.saving = true;
+    syncNotePending();
+    var body = JSON.stringify({ start: r3(beatSound.start),
+                                length: r3(beatSound.seconds) });
+    function failed() {
+      if (token !== wave.saveToken) return;
+      wave.saving = false;
+      beatSound.error = BEAT_SOUND_SAVE_FAILED;
+      return refreshBeatSound();
+    }
+    return fetch("/api/beat-sound", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: body
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        // Newer edit already sent, or one is being dragged: its own reply
+        // will carry the final values.
+        if (token !== wave.saveToken) return;
+        wave.saving = false;
+        if (wave.drag) { syncNotePending(); return; }
+        if (!r.ok || !j.present) {
+          beatSound.error = (j && j.error) || BEAT_SOUND_SAVE_FAILED;
+          return refreshBeatSound();
+        }
+        applyBeatSoundState(j);
+        updateTimer();
+      });
+    }).catch(failed);
+  }
+
+  // Which part of the canvas a pointer is on: an edge (trim), the inside
+  // (slide) or nothing. The edge zone reaches WAVE_EDGE_PX outward and up
+  // to that far inward, shrinking to a third of a narrow window so a
+  // sliver can still be grabbed in its middle. Uses the DRAWN edges, so
+  // what you see is what you grab.
+  function waveHit(x) {
+    var e = waveEdges($("timer-beat-wave").clientWidth, WAVE_MIN_DRAWN_PX);
+    if (!e) return "";
+    var inner = Math.min(WAVE_EDGE_PX, (e.ex - e.sx) / 3);
+    var nearL = x >= e.sx - WAVE_EDGE_PX && x <= e.sx + inner;
+    var nearR = x >= e.ex - inner && x <= e.ex + WAVE_EDGE_PX;
+    if (nearL && nearR) {
+      return Math.abs(x - e.sx) <= Math.abs(x - e.ex) ? "left" : "right";
+    }
+    if (nearL) return "left";
+    if (nearR) return "right";
+    return (x > e.sx && x < e.ex) ? "move" : "";
+  }
+
+  function waveX(ev) {
+    var cv = $("timer-beat-wave");
+    return ev.clientX - cv.getBoundingClientRect().left - cv.clientLeft;
+  }
+
+  function dragWave(ev) {
+    var d = wave.drag, cv = $("timer-beat-wave");
+    var dur = waveDuration(), maxLen = waveMaxLen();
+    var minLen = Math.min(SEL_MIN, dur);
+    var dt = (waveX(ev) - d.x0) / cv.clientWidth * dur;
+    var start, end, len;
+    if (d.mode === "move") {
+      len = Math.min(d.end0 - d.start0, maxLen);
+      start = Math.max(0, Math.min(d.start0 + dt, dur - len));
+      end = start + len;
+    } else if (d.mode === "left") {
+      end = d.end0;
+      start = Math.max(0, end - maxLen, Math.min(d.start0 + dt, end - minLen));
+    } else {
+      start = d.start0;
+      end = Math.min(dur, start + maxLen, Math.max(d.end0 + dt, start + minLen));
+    }
+    start = r3(start);
+    len = r3(end - start);
+    // Rounding must never push the end past the sound.
+    if (start + len > dur) len = floor3(dur - start);
+    beatSound.start = start;
+    beatSound.seconds = len;
+    renderWaveText();
+    // The status line's length moves with the label, not a save later.
+    renderBeatSoundStatus();
+    drawWave();
+  }
+
+  function endWaveDrag(ev) {
+    var d = wave.drag;
+    if (!d) return;
+    wave.drag = null;
+    try { $("timer-beat-wave").releasePointerCapture(d.id); } catch (e) { /* gone */ }
+    if (beatSound.start !== d.start0 || beatSound.seconds !== d.len0) {
+      saveBeatSelection();
+    } else {
+      syncNotePending();
+    }
+  }
+
+  function wireWave() {
+    var cv = $("timer-beat-wave");
+    cv.addEventListener("pointerdown", function (ev) {
+      if (ev.button !== undefined && ev.button !== 0) return;
+      var mode = waveHit(waveX(ev));
+      if (!mode) return;
+      stopPlayback();
+      wave.drag = { mode: mode, x0: waveX(ev), id: ev.pointerId,
+                    start0: beatSound.start, len0: beatSound.seconds,
+                    end0: beatSound.start + beatSound.seconds };
+      // The volunteer is choosing now; the old "shortened" note is theirs
+      // to override.
+      wave.shortened = null;
+      syncNotePending();
+      try { cv.setPointerCapture(ev.pointerId); } catch (e) { /* no capture */ }
+      ev.preventDefault();
+    });
+    cv.addEventListener("pointermove", function (ev) {
+      if (wave.drag) {
+        dragWave(ev);
+        return;
+      }
+      var mode = waveHit(waveX(ev));
+      cv.style.cursor = mode === "move" ? "grab"
+          : mode ? "ew-resize" : "default";
+    });
+    cv.addEventListener("pointerup", endWaveDrag);
+    cv.addEventListener("pointercancel", endWaveDrag);
+    cv.addEventListener("lostpointercapture", endWaveDrag);
+    $("timer-beat-play").addEventListener("click", function () {
+      if (wave.playing) stopPlayback();
+      else startPlayback();
+    });
+    // Back from hidden (ADVANCED opened) or a resized window: the canvas
+    // has a size again and needs its picture.
+    var Watcher = window.ResizeObserver;
+    if (Watcher) new Watcher(function () { drawWave(); }).observe(cv);
+    window.addEventListener("resize", drawWave);
   }
 
   // Mirrors BEAT_MAX_SECONDS in validation.py: 15 minutes at 60 fps.
@@ -2039,7 +2630,8 @@
     if (file) uploadBeatSound(file).then(function () { input.value = ""; });
   });
   $("timer-beat-sound-remove").addEventListener("click", removeBeatSound);
-  refreshBeatSound();
+  wireWave();
+  clearBeatSound();         // a fresh page never carries an old sound
   // Draw the strip once at boot. It is otherwise only drawn when an image
   // is added or removed, so on a fresh load the empty state had no "Drop
   // images here" tile in it — the one moment it is most needed.
@@ -2110,7 +2702,9 @@
 
   var timerTile = {
     update: updateTimer, validate: validateTimer, payload: timerPayload,
-    enter: updateTimer, leave: function () {}, done: showEncoderStat
+    // Opening the countdown starts with no uploaded sound (clearBeatSound).
+    enter: function () { clearBeatSound(); updateTimer(); },
+    leave: function () {}, done: showEncoderStat
   };
   SV.wireTileForm("timer", timerTile, { autoUpdate: true });
   SV.registerTile("timer", timerTile);

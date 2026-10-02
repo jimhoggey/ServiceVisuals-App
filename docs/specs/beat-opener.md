@@ -138,6 +138,55 @@ Files: lead — `beatsound.py` (new: store, decode, trim, detect),
 `render/beat.py`, `validation.py`, `scripts/smoke.py`. UI agent —
 `static/index.html`, `static/js/timer.js`, `static/style.css`.
 
+## Waveform trimmer (addendum, approved 2026-10-02, after v1.42.0)
+
+The owner: "like the Instagram audio … you have this window, and you can
+scroll, and also you can trim the amount that plays." A sound with a long
+constant tone, where only 3 s–6 s is wanted, should be choosable; a 1.5 s
+keyboard hit should play 1.5 s. Decision: **the window is capped at the
+cut** — at most two beats at the current BPM — so what is selected is
+exactly what plays.
+
+| When | Behaviour |
+|---|---|
+| Upload | The **whole** decoded sound (first 30 s) is kept as `original.wav`, peak-normalised to 0.89, not trimmed. The selection starts at the detected attack (the old 5 ms pre-roll rule) and is `min(2.0, rest of the sound)` long. |
+| Selection | `start` and `length` in seconds, stored in `sound.json`. Length 0.05–2.0 s and inside the sound. The note is re-detected on the **selected part** every time it changes. |
+| Window in the UI | A waveform of the whole sound with a highlighted window: drag it to slide, drag either edge to trim. Its length can never exceed two beats at the current BPM (`120 / bpm` s) — the UI clamps while dragging, and a BPM change that makes it too long shortens it (and saves). Below the waveform: "From 3.0 s to 4.5 s — 1.5 s". |
+| Preview | ▶ PLAY plays exactly the selected part in the browser (Web Audio, with the same fades as the export); it becomes ■ STOP while playing. |
+| Render | Plays `start … start + min(length, two beats)` on every cut, 3 ms fade-in (a window that starts mid-sound must not click), 30 ms fade-out at the end of the window. |
+| Old stored sounds | A v1.42.0 `sound.wav` with no `original.wav` is used as the original, selection 0 to `min(2.0, its length)`. |
+
+API (in addition to v1.42.0's):
+
+- `GET /api/beat-sound` and the upload response gain `start`, `duration`
+  (the whole original's length); `seconds` is now the selection length.
+- `PUT /api/beat-sound` JSON `{"start": 3.0, "length": 1.5}` → the status
+  shape. Errors (400): not numbers → `Start and length must be numbers.`;
+  length out of range → `Choose between 0.05 and 2 seconds of your
+  sound.`; outside the sound → `That part is outside your sound.`;
+  nothing stored → `Upload your sound first.`
+- `GET /api/beat-sound/audio` → the original as `audio/wav` (404 when
+  none). The browser decodes it for both the waveform and the preview.
+
+Files: lead — `beatsound.py`, `routes/beatsound.py`, `render/beat.py` (only
+if needed), `scripts/smoke.py`. UI agent — `static/index.html`,
+`static/js/timer.js`, `static/style.css`.
+
+Do not: re-pitch or time-stretch; send the selection or anything about
+the file to analytics; let a hidden selection block an export.
+
+**One sound per visit (owner, after testing the trimmer: "always clear
+the uploaded sound when you click on the countdown or when you first open
+the page or when you reload … sometimes it holds the sound from the
+previous session").** The stored sound is cleared when the app starts
+(`prepare_exports_dir`), when the page loads, and every time the Timer
+tile is opened; SOUND then goes back to BUILT-IN TONE so Export is never
+left blocked. The page skips the clear while one of its own timer exports
+is running. `/api/render` snapshots the selected part into the job
+options (`_own_sound`, in memory only — job options are never serialised)
+when Export is pressed, so clearing it can't change a queued or running
+export. This supersedes "kept … so it survives updates" above.
+
 ## Picture
 
 - Classic style only. White = (255, 255, 255), black = (0, 0, 0): no
