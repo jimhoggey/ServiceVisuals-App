@@ -66,6 +66,8 @@ EVENTS = (
     # sends ONE of these per saved link, so a 20-song batch is 20 ordinary
     # exports rather than one 3-minute "render" (batch-download.md).
     # Never the url, title or filename (youtube-download.md).
+    # A timer adds opener (on|off) -- whether the beat opener was used,
+    # never its BPM or key (beat-opener.md).
     # Any export that ran a video encoder adds encoder (libx264|h264_nvenc|
     # h264_qsv|h264_amf|qtrle|prores_ks) — which answers "is this machine
     # using its graphics card?" across the fleet. When a Windows machine

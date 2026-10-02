@@ -63,12 +63,14 @@ def _reject_foreign_hosts():
 # (confirmed with a test_client request to a blueprint route, see smoke.py).
 from routes.ai import bp as _ai_bp  # noqa: E402
 from routes.backgrounds import bp as _backgrounds_bp  # noqa: E402
+from routes.beatsound import bp as _beatsound_bp  # noqa: E402
 from routes.board import bp as _board_bp  # noqa: E402
 from routes.download import bp as _download_bp  # noqa: E402
 from routes.update import bp as _update_bp  # noqa: E402
 
 app.register_blueprint(_ai_bp)
 app.register_blueprint(_backgrounds_bp)
+app.register_blueprint(_beatsound_bp)
 app.register_blueprint(_board_bp)
 app.register_blueprint(_download_bp)
 app.register_blueprint(_update_bp)
@@ -171,7 +173,12 @@ def _timer_props(options):
     return {"mode": _one_of(options.get("mode"),
                             ("countdown", "clock"), "countdown"),
             "style": _one_of(options.get("style"), TIMER_STYLES, "classic"),
-            "bg": bg}
+            "bg": bg,
+            # Whether the beat opener was used, and with which kind of
+            # sound -- never its BPM, key, or anything about the file.
+            "opener": ("off" if options.get("beat_opener") is not True
+                       else "mine" if options.get("beat_sound") == "mine"
+                       else "on")}
 
 
 def _spinner_props(options):

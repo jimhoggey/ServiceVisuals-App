@@ -303,6 +303,61 @@ directly under itself, in the same screenful as the disabled button; and a
 hidden invalid field never blocks the mode it is hidden in (an invalid
 format leaves Clock's Export enabled).
 
+### Beat opener
+
+ADVANCED → **Beat opener** (spec: `docs/specs/beat-opener.md`). The
+owner's model, from a real conference-opener clip: the screen flashes white
+and black on the song's beat, a note in the song's key pings on every
+white→black cut, and the band comes in at 0:00 in time and in tune. The
+volunteer types the song's **BPM** and picks its **KEY**; the band knows
+both. 0:00 always lands on a beat (the grid counts back from zero).
+
+- Digits show only on white beats, black on white. After 0:00 the hold is
+  black and silent.
+- Classic look only, no background, always 60 fps, with sound — the only
+  export with an audio track.
+- Ticking it switches off RING/BAR, the background, the accent and the
+  warn colour; each says why **next to itself**, and **unticking gives the
+  style and background back**.
+
+**Found and fixed**
+- Unreleased — first scoped review: RING/BAR greyed out with no reason
+  near them; unticking silently lost RING and the background; the still
+  white preview never said the video flashes; the hint didn't say where
+  BPM/key come from or that major/minor doesn't matter; accent and warn
+  colour stayed live while doing nothing; the hold hint promised 0:00 on
+  screen. All fixed before release.
+
+**Sound.** The owner listened and said the first built-in tone was
+"monotone, very dry, not hype building", then that a long reverb made
+each cut "blend in with the other beats". Their rule: **the same tone on
+every cut, just a better tone — no build toward zero ("that screams
+AI")**. The built-in tone is now a pad + soft bell with a short room
+reverb; and **MY SOUND** lets the band upload its own pad or hit, played
+as recorded on every cut, its note detected and checked against KEY.
+- A mismatch between the sound's note and KEY is a warning, never a
+  block: the volunteer may know better (a hit can be in a related note).
+- Fixed before release (scoped review of MY SOUND): the mismatch warning
+  now says the sound isn't re-tuned and which of the two to fix, and a
+  match is confirmed ("Matches the song's key"); with MY SOUND the hint no
+  longer claims "the note is the key's root"; the status says the sound
+  *plays on every beat*; the duplicate "no sound yet" line is gone; notes
+  are named both ways (G♯ / A♭), as the KEY list does.
+
+Rule confirmed: when an option changes where a value comes from (your
+own file instead of the built-in), every nearby hint that explains the
+old source changes or hides with it.
+
+**Found, not yet fixed**
+- With a 16-minute timer and the opener on, the preview still draws
+  16:00:000 as if valid; the error sits under the duration (Export is
+  disabled), but nothing at the preview says so.
+- There is no way to hear the ping before exporting.
+
+Rule confirmed by the review: when a tick disables or hides other
+controls, the reason sits next to those controls, and unticking gives
+back whatever it overrode.
+
 ### Exporting a long render
 
 - A 15-minute 60 fps transparent export takes **several minutes**. Operators

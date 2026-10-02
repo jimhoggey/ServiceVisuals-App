@@ -739,6 +739,8 @@ def check_clock_validation():
                 "accent": "#e8b44f", "warn_last10": False,
                 "hold_seconds": 3, "show_millis": False,
                 "fixed_format": False, "display_format": "",
+                "beat_opener": False, "bpm": 120, "key": "A",
+                "beat_sound": "builtin",
                 "millis_full_size": False, "millis_reveal": False,
                 "millis_reveal_seconds": 60, "millis_60fps": False,
                 "backgrounds": [], "bg_seconds": 10, "bg_dim": 45,
@@ -1645,12 +1647,19 @@ def check_stats_privacy():
           "unreachable: {0!r}".format(set(labels) - reached))
     # The props are read off the options dict; an unvalidated value must
     # never become an analytics prop.
+    # beat_opener carries a truthy non-bool: only a real True counts, and
+    # the BPM/key never become props.
     nasty = {"mode": "Pink sparkly ponies", "style": "/Users/someone/x.png",
-             "backgrounds": ["a" * 16]}
+             "backgrounds": ["a" * 16], "beat_opener": "yes please",
+             "bpm": 125, "key": "A"}
     tp = _app._timer_props(nasty)
     check("timer props clamp to our own words",
-          tp == {"mode": "countdown", "style": "classic", "bg": "one"},
+          tp == {"mode": "countdown", "style": "classic", "bg": "one",
+                 "opener": "off"},
           "got {0!r}".format(tp))
+    check("a real beat opener reports only on/off",
+          _app._timer_props({"beat_opener": True, "bpm": 125, "key": "A"})
+          ["opener"] == "on")
     check("spinner props clamp",
           _app._spinner_props({"mode": "../etc/passwd"}) == {"mode": "random"})
     check("motionbg props clamp",
@@ -2676,6 +2685,405 @@ def check_countdown_format():
               dict(clock, display_format="M:SS")))
 
 
+def check_beat_opener():
+    """docs/specs/beat-opener.md: the beat grid, the ping, validation, the
+    colon form of FORMAT, and one real render with a sound track."""
+    import array
+    import math
+    import wave
+    from PIL import Image
+    from render import beat
+    from render.timer import (
+        _format_remaining, _millis_text, parse_countdown_format, render_timer)
+    from validation import ValidationError, validate_timer_options
+    print("Timer: beat opener")
+
+    fps = 60
+    grid_ok = True
+    detail = ""
+    for bpm in (60, 125, 126, 200):
+        for total in (5, 20, 37):
+            z = total * fps
+            if beat.screen_is_white(z, fps, total, bpm) or \
+                    not beat.screen_is_white(z - 1, fps, total, bpm):
+                grid_ok = False
+                detail = "0:00 not a white-to-black cut at {0} BPM, " \
+                         "{1}s".format(bpm, total)
+            pings = beat.ping_times(total, bpm)
+            if abs(pings[-1] - total) > 1e-9 or pings[0] < 0:
+                grid_ok = False
+                detail = "pings {0!r}".format(pings[:3])
+            # Every ping (bar one at t=0) is a white-to-black cut, on the
+            # frame whose middle is the first at or after it -- the nearest
+            # frame, never more than half a frame off.
+            for t in pings:
+                f = int(math.ceil(t * fps - 0.5 - 1e-9))
+                if f == 0:
+                    continue
+                if beat.screen_is_white(f, fps, total, bpm) or \
+                        not beat.screen_is_white(f - 1, fps, total, bpm):
+                    grid_ok = False
+                    detail = "ping at {0:.3f}s is not a cut ({1} BPM)" \
+                             .format(t, bpm)
+    check("0:00 and every ping fall on a white-to-black cut", grid_ok,
+          detail)
+    check("pings are two beats apart",
+          all(abs(b - a - 120.0 / 125) < 1e-9 for a, b in
+              zip(beat.ping_times(20, 125), beat.ping_times(20, 125)[1:])))
+    whites = sum(beat.screen_is_white(i, fps, 20, 120)
+                 for i in range(20 * fps))
+    check("half of a whole-beat timer is white", whites == 10 * fps,
+          str(whites))
+    check("the hold after 0:00 is black",
+          not any(beat.screen_is_white(i, fps, 20, 120)
+                  for i in range(20 * fps, 22 * fps)))
+    check("A4 is 440 Hz and C4 is middle C",
+          abs(beat.key_frequency("A") - 440.0) < 1e-9
+          and abs(beat.key_frequency("C") - 261.626) < 0.01)
+    check("filename marker spells sharps safely",
+          beat.filename_marker(96, "C#") == "_beat96Cs")
+
+    # The tone track: exact length, stereo, a swell on every cut that is
+    # the same every time, never silent while counting, the key's middle
+    # octave strongest (the reference clip's shape).
+    tmp = tempfile.mkdtemp(prefix="sv-smoke-beat-")
+    try:
+        wav_path = os.path.join(tmp, "p.wav")
+        total = 10
+        beat.write_wav(wav_path, total + 3.0, total, 125, "A")
+        with wave.open(wav_path) as w:
+            n, sr, chans = w.getnframes(), w.getframerate(), w.getnchannels()
+            raw = w.readframes(n)
+        check("the sound track is stereo and exactly as long as the video",
+              chans == 2 and n == (total + 3) * beat.SAMPLE_RATE,
+              "{0} ch, {1} frames".format(chans, n))
+        both = array.array("h")
+        both.frombytes(raw)
+        if sys.byteorder != "little":
+            both.byteswap()
+        pcm = both[0::2]                 # the left ear
+
+        def rms(a, b):
+            seg_ = pcm[int(a * sr):int(b * sr)]
+            return math.sqrt(sum(v * v for v in seg_) / float(len(seg_)))
+
+        cuts = [t for t in beat.ping_times(total, 125) if t > 1.0]
+        swells = [rms(t + 0.01, t + 0.11) for t in cuts]
+        before = [rms(t - 0.11, t - 0.01) for t in cuts]
+        check("every cut swells up from the sustain",
+              all(s > 1.4 * b for s, b in zip(swells, before)),
+              "{0!r} vs {1!r}".format(swells[:2], before[:2]))
+        # Under 10 % is under ~1 dB, below what an ear tells apart. The
+        # residue (measured ~6 %) is the carrier's phase under a fast
+        # envelope inside the window; detuned voices made it 65 %.
+        check("every cut sounds the same (within 10 %)",
+              (max(swells) - min(swells)) / max(swells) < 0.10,
+              "{0:.0f}..{1:.0f}".format(min(swells), max(swells)))
+        quietest = min(rms(t, t + 0.05) for t in
+                       [0.5 + 0.05 * k for k in range(int((total - 0.5)
+                                                          / 0.05))])
+        # Deliberately low (about -20 dB): the owner heard a higher
+        # sustain smear each cut into the next. Low, but never silence.
+        check("never silent while counting",
+              quietest > 0.08 * max(swells), "{0:.0f} of {1:.0f}".format(
+                  quietest, max(swells)))
+        check("quiet once the tone has rung out after 0:00",
+              rms(total + 2.5, total + 2.6) < 0.05 * max(swells))
+        seg = pcm[total * sr:total * sr + sr // 5]
+
+        def power(freq):
+            re_ = sum(v * math.cos(2 * math.pi * freq * k / sr)
+                      for k, v in enumerate(seg))
+            im_ = sum(v * math.sin(2 * math.pi * freq * k / sr)
+                      for k, v in enumerate(seg))
+            return re_ * re_ + im_ * im_
+        p440, p880, p1760, p932 = (power(f) for f in (440, 880, 1760, 932.3))
+        check("key A sounds loudest at A5 (880 Hz), nothing off-key",
+              p880 > p440 and p880 > p1760 and p880 > 50 * p932,
+              "{0:.3g} {1:.3g} {2:.3g} {3:.3g}".format(p440, p880, p1760,
+                                                      p932))
+        # The reverb's impulse: stereo, and the two ears independent --
+        # that independence is the width.
+        ir_path = os.path.join(tmp, "ir.wav")
+        beat.write_reverb_ir(ir_path)
+        with wave.open(ir_path) as w:
+            ir_ch = w.getnchannels()
+            ir = array.array("h")
+            ir.frombytes(w.readframes(w.getnframes()))
+        if sys.byteorder != "little":
+            ir.byteswap()
+        lft, rgt = ir[0::2], ir[1::2]
+        dot = sum(a * b for a, b in zip(lft, rgt))
+        norm = math.sqrt(sum(a * a for a in lft) * sum(b * b for b in rgt))
+        check("the reverb is stereo with independent ears",
+              ir_ch == 2 and abs(dot / norm) < 0.1,
+              "{0} ch, correlation {1:.2f}".format(ir_ch, dot / norm))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # Validation.
+    base = {"minutes": 0, "seconds": 20}
+    clean = validate_timer_options(dict(base, beat_opener=True, bpm=125,
+                                        key="G#"))
+    check("a beat opener validates",
+          (clean["beat_opener"], clean["bpm"], clean["key"])
+          == (True, 125, "G#"), repr(clean))
+    clean = validate_timer_options(dict(base, beat_opener=False, bpm=999,
+                                        key="H"))
+    check("a hidden bad BPM/key never blocks a plain timer",
+          (clean["beat_opener"], clean["bpm"], clean["key"])
+          == (False, 120, "A"), repr(clean))
+    refusals = (
+        ({"beat_opener": "yes"}, '"Beat opener" must be true or false.'),
+        ({"bpm": 59}, "BPM must be a whole number between 60 and 200."),
+        ({"bpm": 201}, "BPM must be a whole number between 60 and 200."),
+        ({"key": "H"}, "Key must be one of C, C#, D, D#, E, F, F#, G, G#, "
+                       "A, A#, B."),
+        ({"style": "ring"},
+         "The beat opener only works with the CLASSIC style."),
+        ({"transparent": "qtrle"},
+         "The beat opener can't be combined with TRANSPARENT."),
+        ({"green_screen": True},
+         "The beat opener can't be combined with GREEN SCREEN."),
+        ({"minutes": 15, "seconds": 1},
+         "With the beat opener on, the timer can run for at most "
+         "15 minutes."),
+    )
+    for extra, message in refusals:
+        try:
+            payload = dict(base, beat_opener=True)
+            payload.update(extra)
+            validate_timer_options(payload)
+            check("refused: {0}".format(message), False, "no error")
+        except ValidationError as exc:
+            check("refused: {0}".format(message), str(exc) == message,
+                  str(exc))
+    clock = {"mode": "clock", "start": "19:59:50", "duration_seconds": 30}
+    check("clock mode ignores the beat opener",
+          "beat_opener" not in validate_timer_options(
+              dict(clock, beat_opener=True)))
+
+    # FORMAT addendum: a colon before the milliseconds.
+    layout = parse_countdown_format("m:ss:000")
+    check("M:SS:000 is milliseconds after a colon",
+          layout["ms_digits"] == 3 and layout["ms_sep"] == ":"
+          and layout["text"] == "M:SS:000"
+          and _format_remaining(20, 20, False, layout) == "0:20"
+          and _millis_text(4321, 3, ":") == ":321")
+    check("SS:00 keeps two digits after the colon",
+          parse_countdown_format("SS:00")["ms_digits"] == 2)
+    check("the dot form still says dot",
+          parse_countdown_format("M:SS.000")["ms_sep"] == ".")
+    for typed, message in (
+            ("M:SS:0000", "Milliseconds go at the end as .0, .00 or .000."),
+            (":000", "Write the units biggest first, ending in seconds: "
+                     "H:MM:SS, M:SS or SS."),
+            # Two millis parts: the dot one is read first, which leaves
+            # zeros in the units, so it's the "only H, M, S" message.
+            ("M:SS:000.0", "Use only H, M, S, colons and .000 — like "
+                           "M:SS.000.")):
+        try:
+            parse_countdown_format(typed)
+            check("{0!r} is refused".format(typed), False, "no error")
+        except ValueError as exc:
+            check("{0!r} is refused with its message".format(typed),
+                  str(exc) == message, str(exc))
+
+    # One real render: 5 s at 125 BPM in A, with sound.
+    filename = render_timer(
+        {"minutes": 0, "seconds": 5, "style": "classic", "hold_seconds": 1,
+         "beat_opener": True, "bpm": 125, "key": "A",
+         "display_format": "M:SS:000", "show_millis": True},
+        lambda pct: None)
+    path = os.path.join(EXPORTS_DIR, filename)
+    frame_dir = tempfile.mkdtemp(prefix="sv-smoke-beat-frames-")
+    try:
+        check("filename carries the beat marker",
+              "_beat125A" in filename, filename)
+        proc = subprocess.run([FFMPEG, "-hide_banner", "-i", path],
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.PIPE)
+        text = proc.stderr.decode("utf-8", "replace")
+        check("the MP4 has a stereo AAC sound track",
+              re.search(r"Audio: aac[^\n]*stereo", text) is not None,
+              text[-400:])
+        check("the MP4 is 60 fps", re.search(r"\b60 fps\b", text)
+              is not None)
+        # 4.95 s is in the white beat just before 0:00 (k = -1, 0.48 s
+        # long); 5.3 s is in the hold, black.
+        shades = {}
+        for t in (4.8, 5.3):
+            out = os.path.join(frame_dir, "{0}.png".format(t))
+            subprocess.run([FFMPEG, "-y", "-ss", str(t), "-i", path,
+                            "-frames:v", "1", out],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            im = Image.open(out).convert("L")
+            shades[t] = (im.getpixel((20, 20)),
+                         min(im.getdata()))
+        check("a white beat is white with dark digits",
+              shades[4.8][0] > 240 and shades[4.8][1] < 60, repr(shades))
+        check("the hold is black with no digits",
+              shades[5.3][0] < 10 and max(shades[5.3]) < 10, repr(shades))
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def check_beat_sound():
+    """docs/specs/beat-opener.md "Your own sound": upload, trim, note
+    detection, the API, validation, and a render that places the clip on
+    every cut and fades it before the next. Generated tones only -- the
+    owner's reference clip is someone else's audio and never in the repo.
+    """
+    import array
+    import io
+    import math
+    import random
+    import wave
+    import app as _app
+    import beatsound
+    from render import beat
+    from render.timer import render_timer
+    from validation import ValidationError, validate_timer_options
+    print("Timer: beat opener -- your own sound")
+
+    def wav_bytes(freqs, seconds=1.5, lead=0.3, noise=0, seed=1):
+        rng = random.Random(seed)
+        n = int(seconds * 44100)
+        lead_n = int(lead * 44100)
+        frames = array.array("h", [0] * lead_n + [
+            int(sum(6000 * math.sin(2 * math.pi * f * k / 44100)
+                    for f in freqs) / max(1, len(freqs)) ** 0.5
+                + noise * rng.uniform(-1, 1)) for k in range(n)])
+        if sys.byteorder != "little":
+            frames.byteswap()
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(44100)
+            w.writeframes(frames.tobytes())
+        buf.seek(0)
+        return buf
+
+    def note_of(freqs, **kw):
+        fd, tmp = tempfile.mkstemp(suffix=".wav")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(wav_bytes(freqs, **kw).read())
+            pcm, _ = beatsound.trim_and_normalise(beatsound.decode(tmp))
+            return beatsound.detect_note(pcm)
+        finally:
+            os.unlink(tmp)
+
+    for label, freqs, kw, want in (
+            ("a clean C#5", [554.37], {}, "C#"),
+            ("an A pad over three octaves", [220, 440, 880], {}, "A"),
+            ("G#4 under heavy noise", [415.3], {"noise": 5000}, "G#"),
+            ("a low E3", [164.8], {}, "E"),
+            ("a C major chord", [261.6, 329.6, 392.0], {}, None),
+            ("white noise", [], {"noise": 8000}, None)):
+        got = note_of(freqs, **kw)
+        check("note of {0}: {1}".format(label, want or "couldn't tell"),
+              got == want, repr(got))
+
+    client = _app.app.test_client()
+    beatsound.remove()
+    check("no sound stored to begin with",
+          client.get("/api/beat-sound").get_json() == {"present": False})
+    resp = client.post("/api/beat-sound", content_type="multipart/form-data",
+                       data={"sound": (io.BytesIO(b"not audio at all"),
+                                       "x.mp3")})
+    check("a file that isn't audio is refused in plain English",
+          resp.status_code == 400 and resp.get_json()["error"]
+          == beatsound.ERR_UNREADABLE, repr(resp.get_json()))
+    resp = client.post("/api/beat-sound", content_type="multipart/form-data",
+                       data={"sound": (wav_bytes([], seconds=1.0), "s.wav")})
+    check("a silent file is refused",
+          resp.status_code == 400 and resp.get_json()["error"]
+          == beatsound.ERR_SILENT, repr(resp.get_json()))
+    resp = client.post("/api/beat-sound", content_type="multipart/form-data",
+                       data={"sound": (wav_bytes([440, 880], seconds=6.0,
+                                                 lead=0.25), "pad.wav")})
+    body = resp.get_json()
+    check("a good upload is stored with its note and length",
+          resp.status_code == 200 and body["note"] == "A"
+          and body["seconds"] == 4.0 and body["trimmed"] is True,
+          repr(body))
+    # 0.25 s of silence went in; the stored clip keeps only a 5 ms
+    # pre-roll, so its first 20 ms already hold the attack.
+    with wave.open(beatsound.SOUND_PATH) as w:
+        stored = array.array("h")
+        stored.frombytes(w.readframes(int(0.02 * 44100)))
+    if sys.byteorder != "little":
+        stored.byteswap()
+    check("the leading silence was trimmed (the attack is at the start)",
+          max(abs(v) for v in stored) > 1000, str(max(stored)))
+    check("GET reports the stored sound",
+          client.get("/api/beat-sound").get_json()
+          == {"present": True, "note": "A", "seconds": 4.0})
+
+    base = {"minutes": 0, "seconds": 5, "beat_opener": True, "bpm": 125,
+            "key": "A"}
+    check("beat_sound defaults to the built-in tone",
+          validate_timer_options(dict(base))["beat_sound"] == "builtin")
+    try:
+        validate_timer_options(dict(base, beat_sound="loud"))
+        check("an unknown beat_sound is refused", False, "no error")
+    except ValidationError as exc:
+        check("an unknown beat_sound is refused",
+              str(exc) == 'Sound must be "builtin" or "mine".', str(exc))
+    check("analytics say only that it was your own sound",
+          _app._timer_props({"beat_opener": True, "beat_sound": "mine"})
+          ["opener"] == "mine")
+
+    # The render: the clip (a 4 s A pad -- longer than two beats) starts
+    # on every cut and is faded out before the next one.
+    filename = render_timer(validate_timer_options(
+        dict(base, beat_sound="mine", hold_seconds=1)), lambda pct: None)
+    path = os.path.join(EXPORTS_DIR, filename)
+    try:
+        proc = subprocess.run(
+            [FFMPEG, "-v", "error", "-i", path, "-ac", "1", "-ar", "44100",
+             "-f", "s16le", "-"], stdout=subprocess.PIPE)
+        pcm = array.array("h")
+        pcm.frombytes(proc.stdout[:len(proc.stdout) // 2 * 2])
+        if sys.byteorder != "little":
+            pcm.byteswap()
+
+        def level(a, b):
+            seg = pcm[int(a * 44100):int(b * 44100)]
+            return math.sqrt(sum(v * v for v in seg) / float(len(seg)))
+        cuts = [t for t in beat.ping_times(5, 125) if t > 0.05]
+        starts = [level(t + 0.005, t + 0.05) for t in cuts]
+        # The last 6 ms before a cut: deep in the 30 ms fade.
+        dips = [level(t - 0.007, t - 0.001) for t in cuts]
+        check("your sound starts on every cut",
+              min(starts) > 1500, repr([round(v) for v in starts]))
+        check("and is faded out just before the next cut",
+              all(d < 0.25 * s for d, s in zip(dips, starts)),
+              repr([round(v) for v in dips]))
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+    check("DELETE removes it",
+          client.delete("/api/beat-sound").get_json() == {"present": False})
+    try:
+        validate_timer_options(dict(base, beat_sound="mine"))
+        check("'mine' with nothing stored is refused", False, "no error")
+    except ValidationError as exc:
+        check("'mine' with nothing stored is refused",
+              str(exc) == "Upload your sound first, or switch back to "
+                          "the built-in tone.", str(exc))
+    check("a hidden 'mine' never blocks a plain timer",
+          validate_timer_options({"minutes": 0, "seconds": 5,
+                                  "beat_sound": "mine"})["beat_sound"]
+          == "builtin")
+
+
 def check_ai_model_routing():
     """Spinner Fill with AI: the default model is openrouter/auto held to
     its low cost tier, and an account with no credit (402) falls back to
@@ -3674,6 +4082,8 @@ def main():
 
     check_fixed_format()
     check_countdown_format()
+    check_beat_opener()
+    check_beat_sound()
     check_ai_model_routing()
     print()
     check_millis_size_and_ticking()

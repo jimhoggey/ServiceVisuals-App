@@ -67,7 +67,17 @@ contain a file path). The full list of events lives in [`stats.py`](stats.py).
      seconds, `.000` milliseconds: `M:SS.000` turns a 20-second timer into
      `0:20.000`, `HH:MM:SS` gives `00:05:00`, and the first unit stretches
      as needed (`M:SS` on 90 minutes reads `90:00`). Leave it empty for the
-     usual layout. With milliseconds in the format there are three more
+     usual layout (a colon before the milliseconds works too, `M:SS:000`).
+     **Beat opener**, also under Advanced, makes a conference-opener
+     countdown: enter the song's BPM and key, and the video flashes white
+     and black on the beat with a note in the song's key on every cut, so
+     0:00 lands on a beat and the band comes in in time and in tune
+     (classic look, 60 fps, the only export with sound, up to 15 minutes).
+     Choose **MY SOUND** to upload your band's own pad or hit (WAV, MP3 or
+     M4A, up to 4 seconds used) — it plays as recorded on every cut, and
+     the app tells you which note it's in so you can match the song's key.
+     It's kept in `~/.service-visuals` and never leaves your computer.
+     With milliseconds in the format there are three more
      Countdown-only options: **Full-size milliseconds** draws the `.000`
      at the same size as the main digits (the whole timer is drawn a
      little smaller to still fit), **Hold at zero until the end** keeps

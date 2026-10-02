@@ -40,6 +40,186 @@
     return $("timer-bg-images").getAttribute("aria-pressed") === "true";
   }
 
+  // Beat opener (spec: docs/specs/beat-opener.md): ticked AND in countdown
+  // mode. The box keeps its tick while Clock is showing -- the group is
+  // hidden there and the server never hears of it -- so every rule below
+  // asks this, never the checkbox alone, or a stale tick would grey out
+  // controls for a feature the operator can no longer see.
+  // What the opener overrides, held while it is ticked (applyTimerMode).
+  var BEAT_BG_BUTTONS = ["timer-bg-images", "timer-bg-green",
+                         "timer-bg-transparent"];
+  var beatSaved = null;
+
+  function beatOpenerOn() {
+    var modeEl = document.querySelector('input[name="timer-mode"]:checked');
+    return !!modeEl && modeEl.value !== "clock" && $("timer-beat").checked;
+  }
+
+  // Your own sound (spec: docs/specs/beat-opener.md, addendum). The server
+  // keeps one uploaded sound; this is its last known state, from GET
+  // /api/beat-sound at boot and after every upload or remove. `trimmed` only
+  // comes back from the POST (GET doesn't know it), so it is carried over
+  // the refresh that follows -- otherwise "Only the first 4 seconds are
+  // used." would vanish a moment after it appeared. `error` is the last
+  // upload or remove failure, shown in place of the status until the
+  // operator does something else.
+  var beatSound = { present: false, note: null, seconds: 0, trimmed: false,
+                    busy: false, error: "" };
+  var BEAT_SOUND_UPLOAD_FAILED = "Couldn't upload that sound — try again.";
+  var BEAT_SOUND_MISSING = "Upload your sound first, or switch back to " +
+      "the built-in tone.";
+
+  function beatSoundChoice() {
+    var el = document.querySelector('input[name="timer-beat-sound"]:checked');
+    return el ? el.value : "builtin";
+  }
+
+  // "Mine" only counts while the opener is on AND visible: a hidden choice
+  // must never block a render (docs/user-flows.md rule 4).
+  function beatSoundMineOn() {
+    return beatOpenerOn() && beatSoundChoice() === "mine";
+  }
+
+  function validateTimerBeatSound() {
+    if (!beatSoundMineOn() || beatSound.present) return null;
+    return BEAT_SOUND_MISSING;
+  }
+
+  // Note names for people: the server sends "G#", a musician reads "G♯" --
+  // and a chart may say "A♭", so a sharp is named both ways, exactly as
+  // the KEY dropdown lists it (UX review: "G♭" on the chart and "F♯" in
+  // the warning didn't connect).
+  var FLAT_OF = { "C#": "D♭", "D#": "E♭", "F#": "G♭", "G#": "A♭",
+                  "A#": "B♭" };
+  function noteLabel(n) {
+    n = String(n);
+    return FLAT_OF[n] ? n.replace("#", "♯") + " / " + FLAT_OF[n] : n;
+  }
+
+  function applyBeatSoundState(j) {
+    beatSound.present = !!(j && j.present);
+    beatSound.note = beatSound.present && j.note ? j.note : null;
+    beatSound.seconds = beatSound.present ? (j.seconds || 0) : 0;
+    if (!beatSound.present) beatSound.trimmed = false;
+  }
+
+  function refreshBeatSound() {
+    return fetch("/api/beat-sound", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : { present: false }; })
+      .catch(function () { return { present: false }; })
+      .then(function (j) {
+        applyBeatSoundState(j);
+        updateTimer();
+      });
+  }
+
+  function uploadBeatSound(file) {
+    var fd = new FormData();
+    fd.append("sound", file);
+    beatSound.busy = true;
+    beatSound.error = "";
+    updateTimer();
+    return fetch("/api/beat-sound", { method: "POST", body: fd })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok || !j.present) {
+            beatSound.error = (j && j.error) || BEAT_SOUND_UPLOAD_FAILED;
+            return;
+          }
+          applyBeatSoundState(j);
+          beatSound.trimmed = !!j.trimmed;
+        });
+      })
+      .catch(function () { beatSound.error = BEAT_SOUND_UPLOAD_FAILED; })
+      .then(function () {
+        beatSound.busy = false;
+        // The server's copy is the truth; this also redraws.
+        return refreshBeatSound();
+      });
+  }
+
+  function removeBeatSound() {
+    beatSound.busy = true;
+    beatSound.error = "";
+    updateTimer();
+    return fetch("/api/beat-sound", { method: "DELETE" })
+      .then(function (r) {
+        if (!r.ok) beatSound.error = "Couldn't remove that sound — try again.";
+      })
+      .catch(function () {
+        beatSound.error = "Couldn't remove that sound — try again.";
+      })
+      .then(function () {
+        beatSound.busy = false;
+        return refreshBeatSound();
+      });
+  }
+
+  // Status line, the note under it, and REMOVE. Called from updateTimer().
+  function renderBeatSound() {
+    var status = $("timer-beat-sound-status");
+    var noteEl = $("timer-beat-sound-note");
+    var key = $("timer-key").value || "A";
+    var text, bad = false;
+    if (beatSound.busy) {
+      text = "Uploading…";
+    } else if (beatSound.error) {
+      text = beatSound.error;
+      bad = true;
+    } else if (beatSound.present) {
+      // Says it WILL play, not just what the file is: the highlighted
+      // segment was the only other sign of which sound gets exported.
+      text = "Your sound plays on every beat: " +
+          beatSound.seconds.toFixed(1) + " s" +
+          (beatSound.note ? ", in " + noteLabel(beatSound.note) : "") + ".";
+      if (beatSound.trimmed) text += " Only the first 4 seconds are used.";
+    } else {
+      // Empty: the instruction line below already says what to do, and
+      // a second "no sound yet" line just repeated it.
+      text = "";
+    }
+    status.textContent = text;
+    status.hidden = !text;
+    status.classList.toggle("is-bad", bad);
+
+    // One line under the status, most urgent first: the blocking error,
+    // then the two key warnings (which never block).
+    var line = "", cls = "";
+    var missing = beatSoundMineOn() && !beatSound.busy
+        ? validateTimerBeatSound() : null;
+    if (missing) {
+      line = missing; cls = "is-bad";
+    } else if (beatSound.present && !beatSound.busy && !beatSound.error) {
+      if (beatSound.note === null) {
+        line = "Couldn't tell your sound's note — make sure it's " +
+            "in the song's key.";
+        cls = "is-warn";
+      } else if (beatSound.note !== key) {
+        // The way out, in the same line: KEY doesn't change the sound
+        // (it plays as recorded), so the volunteer needs to know which
+        // of the two to fix.
+        line = "Your sound is in " + noteLabel(beatSound.note) +
+            " but the song is in " + noteLabel(key) + ". The sound " +
+            "isn't re-tuned — set KEY to " + noteLabel(beatSound.note) +
+            " if that's the song's key, or upload a sound in " +
+            noteLabel(key) + ".";
+        cls = "is-warn";
+      } else {
+        // Confirms the fix worked instead of a warning just vanishing.
+        line = "Matches the song's key (" + noteLabel(key) + ").";
+      }
+    }
+    noteEl.textContent = line;
+    noteEl.hidden = !line;
+    noteEl.classList.toggle("is-bad", cls === "is-bad");
+    noteEl.classList.toggle("is-warn", cls === "is-warn");
+    $("timer-beat-sound-remove").hidden = !beatSound.present;
+    $("timer-beat-sound-remove").disabled = beatSound.busy;
+  }
+
+  // Mirrors BEAT_MAX_SECONDS in validation.py: 15 minutes at 60 fps.
+  var BEAT_MAX_SECONDS = 900;
+
   // Preview Image objects, cached by (id, blur) so a redraw triggered by an
   // unrelated keystroke (dim slider, warn checkbox, ...) never re-fetches
   // or re-decodes an image that is already on screen — without this cache
@@ -478,6 +658,9 @@
       e.preventDefault();
       depth = 0;
       zone.classList.remove("is-drop-target");
+      // The beat opener has no background: swallow the drop (so the
+      // webview does not navigate to the file) but add nothing.
+      if (beatOpenerOn()) return;
       var files = e.dataTransfer.files;
       if (files && files.length) uploadTimerBgFiles(files);
     });
@@ -527,6 +710,20 @@
   }
 
   function applyTimerBg(isClockMode) {
+    // Beat opener: the whole screen flashes white and black, so there is no
+    // background to choose. Switch all three choices off (images stay
+    // stored, like any time IMAGES is switched off) and disable them --
+    // an unpressed, disabled button cannot leave a hidden choice that
+    // blocks or alters the export (docs/user-flows.md rule 4).
+    var beat = beatOpenerOn();
+    ["timer-bg-images", "timer-bg-green", "timer-bg-transparent"]
+      .forEach(function (id) {
+        var btn = $(id);
+        if (beat) btn.setAttribute("aria-pressed", "false");
+        btn.disabled = beat;
+        btn.title = beat ? "The beat opener flashes the screen white " +
+                           "and black." : "";
+      });
     var green = $("timer-bg-green").getAttribute("aria-pressed") === "true";
     var transparent = $("timer-bg-transparent").getAttribute("aria-pressed") === "true";
     // Transparent (spec: docs/specs/alpha-export.md) hides the image UI for
@@ -653,9 +850,18 @@
       // plain, 30 with milliseconds, 60 with smoother milliseconds.
       var fpsTag = !showMillisOn ? "15fps"
           : (millis60fpsLive ? "60fps" : "30fps");
-      specLine.textContent = transparent
-          ? "1920x1080 - " + fpsTag + " - .mov with transparency"
-          : "1920x1080 - " + fpsTag + " - H.264 MP4";
+      if (beat) {
+        // Always 60 fps, and the only export with an audio track. The
+        // preview is one still white beat, so the caption under it is
+        // where the flashing has to be said (UX review).
+        specLine.textContent = "Preview shows a white beat. The video " +
+            "flashes white and black with a note - 60fps H.264 MP4 " +
+            "with sound";
+      } else {
+        specLine.textContent = transparent
+            ? "1920x1080 - " + fpsTag + " - .mov with transparency"
+            : "1920x1080 - " + fpsTag + " - H.264 MP4";
+      }
     }
     // Same problem on the button itself: it is hardcoded
     // "EXPORT MP4" in the markup, and a transparent export is a
@@ -667,7 +873,11 @@
     }
 
     var emptyHint = $("timer-bg-empty");
-    if (transparent) {
+    if (beat) {
+      emptyHint.hidden = false;
+      emptyHint.textContent = "The beat opener flashes the screen white " +
+          "and black. Your background comes back when you untick it.";
+    } else if (transparent) {
       emptyHint.hidden = false;
       emptyHint.textContent = "Transparent — no background at all. " +
           "Overlay this file directly on your own video, no keying needed.";
@@ -703,7 +913,8 @@
     // Only images that are really the background can block an export:
     // stored-but-switched-off ones are never sent (rule 4 in
     // docs/user-flows.md -- nothing hidden may block the operator).
-    if (!bgImagesOn()) return null;
+    // The beat opener has no background at all, so none of this applies.
+    if (!bgImagesOn() || beatOpenerOn()) return null;
     if (timerBg.ids.length > BG_PER_TIMER_MAX) {
       return "A timer can use up to " + BG_PER_TIMER_MAX +
              " background images.";
@@ -747,11 +958,20 @@
     var parsed = parseCountdownFormat($("timer-format").value);
     var showMillis = mode === "clock" ? $("timer-show-millis").checked
         : !!(parsed.layout && parsed.layout.ms > 0);
+    // Beat opener: classic only, and no background of any kind. Forced here
+    // as well as by applyTimerMode()/applyTimerBg() so the payload is right
+    // by construction even if a stale RING tick or an image choice survived.
+    var beat = beatOpenerOn();
     return {
       mode: mode,
       minutes: toInt($("timer-minutes").value, 0),
       seconds: toInt($("timer-seconds").value, 0),
-      style: styleEl ? styleEl.value : "classic",
+      style: beat ? "classic" : (styleEl ? styleEl.value : "classic"),
+      beatOpener: beat,
+      bpm: toInt($("timer-bpm").value, 120),
+      key: $("timer-key").value || "A",
+      // "builtin" unless the opener is on AND "My sound" is chosen.
+      beatSound: beatSoundMineOn() ? "mine" : "builtin",
       accent: currentAccent("timer"),
       warn: $("timer-warn").checked,
       hold: toInt($("timer-hold").value, 5),
@@ -779,8 +999,8 @@
       // applyTimerMode()'s disable/auto-uncheck-past-15-min correction,
       // which always runs earlier in the same updateTimer() pass.
       millis60fps: $("timer-millis-60fps").checked,
-      greenScreen: green,
-      transparent: transparentOn ?
+      greenScreen: green && !beat,
+      transparent: transparentOn && !beat ?
           (transparentFormatEl ? transparentFormatEl.value : "qtrle") : false,
       // Backgrounds (spec: docs/specs/timer-backgrounds.md): valid in both
       // modes. `backgrounds` comes from JS state (timerBg.ids), not a DOM
@@ -790,7 +1010,7 @@
       // hasBg (backgrounds.length > 0, used throughout for the digit-
       // shadow halo) and the export payload are both right by
       // construction — no separate case needed anywhere downstream.
-      backgrounds: bgImagesOn() ? timerBg.ids.slice() : [],
+      backgrounds: bgImagesOn() && !beat ? timerBg.ids.slice() : [],
       bgSeconds: toInt($("timer-bg-seconds").value, 10),
       bgDim: toInt($("timer-bg-dim").value, 45),
       bgBlur: $("timer-bg-blur").checked
@@ -804,11 +1024,28 @@
     if (s === null || s < 0 || s > 59) return "Seconds must be a whole number from 0 to 59.";
     var total = m * 60 + s;
     if (total < 5) return "The timer must run for at least 5 seconds.";
+    // Mirrors BEAT_MAX_SECONDS in validation.py. Checked before the 120
+    // minute cap so the operator sees the limit that actually applies.
+    if (beatOpenerOn() && total > BEAT_MAX_SECONDS) {
+      return "With the beat opener on, the timer can run for at most " +
+          "15 minutes.";
+    }
     if (total > 7200) return "The timer can run for at most 120 minutes in total.";
     // Mirrors MILLIS_MAX_SECONDS in validation.py: 30 fps with nothing
     // cacheable.
     if (countdownMillisOn() && total > 1800) {
       return "With milliseconds on, the timer can run for at most 30 minutes. Turn milliseconds off for a longer timer.";
+    }
+    return null;
+  }
+
+  // Only while the opener is ticked in countdown mode: a hidden BPM box
+  // must never block a render (docs/user-flows.md rule 4).
+  function validateTimerBpm() {
+    if (!beatOpenerOn()) return null;
+    var bpm = intFrom($("timer-bpm"));
+    if (bpm === null || bpm < 60 || bpm > 200) {
+      return "BPM must be a whole number between 60 and 200.";
     }
     return null;
   }
@@ -865,7 +1102,8 @@
     // quick timer whenever that box -- hidden by then -- had been left
     // empty: an error about a feature the operator had switched off,
     // pointing at a field they could no longer see.
-    return t.formatError || validateTimerDuration() || validateTimerHold() ||
+    return t.formatError || validateTimerDuration() || validateTimerBpm() ||
+        validateTimerBeatSound() || validateTimerHold() ||
         (t.showMillis && t.millisReveal
             ? validateTimerMillisRevealSeconds() : null);
   }
@@ -874,7 +1112,7 @@
   // parse_countdown_format() in render/timer.py line for line -- the same
   // rules in the same order, so the same typing gets the same message --
   // because the preview must show exactly what the first frame will.
-  // Returns {layout: null|{units, ms}, error: null|"message"}.
+  // Returns {layout: null|{units, ms, msSep}, error: null|"message"}.
   var FORMAT_ERRORS = {
     chars: "Use only H, M, S, colons and .000 — like M:SS.000.",
     mixed: "Put a colon between the units, like M:SS.",
@@ -893,6 +1131,13 @@
     return !!(p.layout && p.layout.ms > 0);
   }
 
+  // The millis run as drawn: the separator the operator typed (":" for
+  // M:SS:000, "." otherwise) then one to three zeros. The first frame is
+  // always the full total, so the digits are always zeros.
+  function millisRunText(layout, digits) {
+    return ((layout && layout.msSep) || ".") + "000".slice(0, digits);
+  }
+
   function parseCountdownFormat(raw) {
     var fail = function (key) { return { layout: null, error: FORMAT_ERRORS[key] }; };
     if (raw.length > 16) return fail("long");
@@ -901,12 +1146,31 @@
     var dotAt = text.indexOf(".");
     var main = dotAt < 0 ? text : text.slice(0, dotAt);
     var ms = 0;
+    var msSep = ".";
     if (dotAt >= 0) {
       var tail = text.slice(dotAt + 1);
       if (tail.length < 1 || tail.length > 3 || !/^0+$/.test(tail)) {
         return fail("millis");
       }
       ms = tail.length;
+    } else {
+      // Colon form (spec: docs/specs/beat-opener.md FORMAT addendum): with
+      // no "." anywhere, a LAST colon group of 1-3 zeros is the
+      // milliseconds -- M:SS:000 -- and the colon typed is the colon drawn.
+      // Unit groups are letters, so a zeros group can never be one.
+      var lastColon = text.lastIndexOf(":");
+      if (lastColon >= 0) {
+        var colonTail = text.slice(lastColon + 1);
+        // Mirrors the Python: a last group of zeros is always the millis
+        // part, and four or more gets the millis message, not "only H, M
+        // and S" -- the volunteer clearly meant milliseconds.
+        if (/^0+$/.test(colonTail)) {
+          if (colonTail.length > 3) return fail("millis");
+          main = text.slice(0, lastColon);
+          ms = colonTail.length;
+          msSep = ":";
+        }
+      }
     }
     main = main.toUpperCase();
     if (!/^[HMS:]*$/.test(main)) return fail("chars");
@@ -929,7 +1193,7 @@
     for (i = 0; i < groups.length; i++) {
       units.push({ letter: groups[i].charAt(0), width: groups[i].length });
     }
-    return { layout: { units: units, ms: ms }, error: null };
+    return { layout: { units: units, ms: ms, msSep: msSep }, error: null };
   }
 
   // Mirrors _format_with_units(): the leftmost unit takes everything above
@@ -1194,7 +1458,17 @@
     var t = readTimer();
     // Empty set -> paintBackground(), unchanged from before this feature.
     // The style's track + digits are painted on top either way (spec).
-    drawTimerBackground(ctx, t);
+    if (t.beatOpener) {
+      // Beat opener: the preview is a white beat -- a flat white screen, no
+      // vignette, track or accent, digits in near-black. (The black beats
+      // and the sound exist only in the render.) readTimer() already holds
+      // style at classic and backgrounds empty, so the classic branches
+      // below draw the digits exactly where the renderer puts them.
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, PW, PH);
+    } else {
+      drawTimerBackground(ctx, t);
+    }
 
     if (t.mode === "clock") { drawClockTimerPreview(ctx, t); return; }
 
@@ -1203,7 +1477,7 @@
     // the box (UX review of the FORMAT box). Say so instead of pretending.
     if (t.formatError) {
       ctx.font = "600 22px " + FONT_LABEL;
-      ctx.fillStyle = TEXT_LIGHT;
+      ctx.fillStyle = t.beatOpener ? "#111111" : TEXT_LIGHT;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText("Fix the format to see the preview", PW / 2, PH / 2);
@@ -1214,11 +1488,13 @@
     var text = formatClock(total, total, false, t.formatLayout);
     // renderer: accent digits whenever remaining <= 10s (first frame shown here)
     var digitColor = (t.warn && total > 0 && total <= 10) ? t.accent : TEXT_LIGHT;
+    // The opener never uses the warn colour; its digits are (17, 17, 17).
+    if (t.beatOpener) digitColor = "#111111";
     // Addendum (v1.23.0): first frame is always the full total, so millis
     // are always ".000" here — never derived from wall time (drawClockTimerPreview
     // above follows the same "frame 0" rule for clock mode).
     // A typed ".0"/".00" draws one/two zeros, like the renderer's run.
-    var millis = t.showMillis ? "." + "000".slice(0, t.msDigits) : "";
+    var millis = t.showMillis ? millisRunText(t.formatLayout, t.msDigits) : "";
     // Full-size millis (spec: docs/specs/millis-reveal.md): 1.0 instead of
     // today's fixed 0.55, threaded into every clockCompositeWidth/
     // drawClockComposite call below so the preview's auto-fit shrinks the
@@ -1321,7 +1597,9 @@
       // not past the 15-minute cap, which applyTimerMode() already
       // enforces by unchecking the box), so this estimate reflects the
       // real ~2x render-time cost before the operator exports.
-      var fps2 = t.showMillis ? (t.millis60fps ? 60 : 30)
+      // Beat opener: always 60 (spec), whatever the millis settings say.
+      var fps2 = t.beatOpener ? 60
+        : t.showMillis ? (t.millis60fps ? 60 : 30)
         : (t.style === "classic" ? 1 : (total <= 600 ? 10 : (total <= 1800 ? 4 : 2)));
       frames = (total + t.hold) * fps2;
     }
@@ -1350,6 +1628,50 @@
     if (isClock && $("timer-style-bar").checked) $("timer-style-classic").checked = true;
     $("timer-style-pick").classList.toggle("is-two", isClock);
 
+    // Beat opener (spec: docs/specs/beat-opener.md): the flashing screen has
+    // no ring or bar, so RING and BAR are greyed out and a selected one
+    // falls back to CLASSIC -- same fallback as BAR in clock mode above.
+    // The group and its fields exist only in countdown mode.
+    var beat = !isClock && $("timer-beat").checked;
+    // Ticking the opener overrides the style and background; unticking
+    // gives them back. Without this a volunteer who ticked it just to see
+    // what it does lost their RING and their images silently (UX review).
+    // Saved on the way in, before anything below forces CLASSIC and
+    // applyTimerBg() unpresses the background buttons.
+    if (beat && !beatSaved) {
+      var styleNow = document.querySelector('input[name="timer-style"]:checked');
+      beatSaved = { style: styleNow ? styleNow.id : "timer-style-classic",
+                    bg: {} };
+      BEAT_BG_BUTTONS.forEach(function (id) {
+        beatSaved.bg[id] = $(id).getAttribute("aria-pressed");
+      });
+    } else if (!beat && beatSaved) {
+      var saved = beatSaved;
+      beatSaved = null;
+      // Clock mode has no BAR; its own fallback above already chose.
+      if (!(isClock && saved.style === "timer-style-bar")) {
+        $(saved.style).checked = true;
+      }
+      BEAT_BG_BUTTONS.forEach(function (id) {
+        $(id).setAttribute("aria-pressed", saved.bg[id]);
+      });
+    }
+    $("timer-beat-group").hidden = isClock;
+    $("timer-beat-fields").hidden = !beat;
+    $("timer-beat-mine").hidden = !(beat && beatSoundChoice() === "mine");
+    // Said next to each control the opener switches off, not only beside
+    // the tick far below in ADVANCED -- nobody connected the two.
+    $("timer-style-beat-hint").hidden = !beat;
+    $("timer-accent-beat-hint").hidden = !beat;
+    $("timer-accent-group").classList.toggle("is-off", beat);
+    // Warn colour does nothing on black-on-white digits (rule 3).
+    $("timer-warn").disabled = beat;
+    $("timer-style-ring").disabled = beat;
+    $("timer-style-bar").disabled = beat;
+    if (beat && !$("timer-style-classic").checked) {
+      $("timer-style-classic").checked = true;
+    }
+
     $("timer-duration-group").hidden = isClock;
     $("timer-options-group").hidden = isClock;
     $("timer-clock-start-group").hidden = !isClock;
@@ -1370,8 +1692,10 @@
     // millis controls above, which stay visible-but-inert there) because
     // clock mode has no "total duration" for the 15-minute cap below to
     // mean anything against. Same hide mechanism as BAR above.
-    $("timer-millis-60fps-row").hidden = isClock;
-    $("timer-millis-60fps-hint").hidden = isClock;
+    // Also hidden while the beat opener is on: it is always 60 fps, so the
+    // choice means nothing there.
+    $("timer-millis-60fps-row").hidden = isClock || beat;
+    $("timer-millis-60fps-hint").hidden = isClock || beat;
     if (!isClock) {
       // Mirrors MILLIS_MAX_SECONDS_60FPS in validation.py: 900s (15 min) --
       // a tighter cap than plain millis' 1800s because 60fps roughly
@@ -1453,10 +1777,12 @@
         // meant. Recommend the millis form while the box is empty.
         var startText = formatClock(startTotal, startTotal, false,
                                     t.formatLayout) +
-            (t.showMillis ? "." + "000".slice(0, t.msDigits) : "");
+            (t.showMillis ? millisRunText(t.formatLayout, t.msDigits) : "");
         fmtHint.textContent = "Starts at " + startText + ". " +
             (t.formatLayout
-                ? "H hours, M minutes, S seconds, .000 milliseconds."
+                ? "H hours, M minutes, S seconds, " +
+                  (t.showMillis ? millisRunText(t.formatLayout, 3) : ".000") +
+                  " milliseconds."
                 : "Leave empty for the usual layout, or type M:SS.000 " +
                   "for milliseconds.");
       }
@@ -1498,14 +1824,36 @@
       // and fixing only one left a plain timer greyed out.
       var revealSecondsErr = (t.showMillis && t.millisReveal)
           ? validateTimerMillisRevealSeconds() : null;
-      err = t.formatError || durationErr || holdErr || revealSecondsErr ||
-          bgErr;
+      var bpmErr = validateTimerBpm();
+      var soundErr = validateTimerBeatSound();
+      err = t.formatError || durationErr || bpmErr || soundErr || holdErr ||
+          revealSecondsErr || bgErr;
+      renderBeatSound();
+      // The error replaces the hint under the field, like every other
+      // field here, and the box is flagged for screen readers.
+      var beatHint = $("timer-beat-hint");
+      // With MY SOUND the note is whatever was recorded and KEY only
+      // checks it, so the built-in tone's "the note is the key's root"
+      // would tell the volunteer KEY changes their sound (UX review).
+      beatHint.textContent = bpmErr || (beatSoundMineOn()
+          ? "Use the song's BPM and key — ask the band. With your own " +
+            "sound, KEY only checks it's in tune."
+          : "Use the song's BPM and key — ask the band. The note is " +
+            "the key's root, so major or minor doesn't matter.");
+      beatHint.classList.toggle("is-bad", !!bpmErr);
+      $("timer-bpm").setAttribute("aria-invalid", bpmErr ? "true" : "false");
       var hint = $("timer-duration-hint");
-      hint.textContent = durationErr || (t.showMillis ? "5 seconds to 30 minutes with milliseconds" : "5 seconds to 120 minutes");
+      hint.textContent = durationErr ||
+          (t.beatOpener ? "5 seconds to 15 minutes with the beat opener"
+          : t.showMillis ? "5 seconds to 30 minutes with milliseconds"
+          : "5 seconds to 120 minutes");
       hint.classList.toggle("is-bad", !!durationErr);
       var holdHint = $("timer-hold-hint");
-      holdHint.textContent = holdErr ||
-        "After the countdown ends the video stays on 0:00 this long. 0 to 30 seconds.";
+      // With the opener the hold is black and silent, not a 0:00 on
+      // screen -- the hint must not promise digits that aren't there.
+      holdHint.textContent = holdErr || (t.beatOpener
+        ? "After 0:00 the screen stays black and silent this long. 0 to 30 seconds."
+        : "After the countdown ends the video stays on 0:00 this long. 0 to 30 seconds.");
       holdHint.classList.toggle("is-bad", !!holdErr);
       $("timer-hold").setAttribute("aria-invalid", holdErr ? "true" : "false");
 
@@ -1597,6 +1945,16 @@
         // clock branch, which never reads it (spec: "Countdown only, not
         // clock mode").
         millis_60fps: t.millis60fps,
+        // Beat opener (spec: docs/specs/beat-opener.md): countdown-only.
+        // bpm and key always go, at the server's defaults while the box is
+        // off, so a stale or half-typed BPM in the hidden field can never
+        // reach validation and block a plain timer.
+        beat_opener: t.beatOpener,
+        bpm: t.beatOpener ? t.bpm : 120,
+        key: t.beatOpener ? t.key : "A",
+        // Your own sound: always "builtin" while the opener is off, so a
+        // leftover "My sound" choice can never reach validation.
+        beat_sound: t.beatOpener ? t.beatSound : "builtin",
         // Backgrounds (spec: docs/specs/timer-backgrounds.md).
         backgrounds: t.backgrounds,
         bg_seconds: t.bgSeconds,
@@ -1666,6 +2024,22 @@
     if (this.files && this.files.length) uploadTimerBgFiles(this.files);
   });
   wireTimerBgDrop();
+  // Your own sound. Choosing a sound source clears a stale upload error
+  // (it was about the last attempt, not this choice); the form-level change
+  // listener then redraws.
+  Array.prototype.forEach.call(
+    document.querySelectorAll('input[name="timer-beat-sound"]'),
+    function (el) {
+      el.addEventListener("change", function () { beatSound.error = ""; });
+    });
+  $("timer-beat-sound-file").addEventListener("change", function () {
+    var file = this.files && this.files[0];
+    // Cleared so picking the same file again (after fixing it) still fires.
+    var input = this;
+    if (file) uploadBeatSound(file).then(function () { input.value = ""; });
+  });
+  $("timer-beat-sound-remove").addEventListener("click", removeBeatSound);
+  refreshBeatSound();
   // Draw the strip once at boot. It is otherwise only drawn when an image
   // is added or removed, so on a fresh load the empty state had no "Drop
   // images here" tile in it — the one moment it is most needed.

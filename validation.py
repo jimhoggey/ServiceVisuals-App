@@ -13,6 +13,8 @@ from urllib.parse import urlsplit
 
 from render.encoder import ALPHA_FORMATS, UPLOADS_DIR
 from render.qr import POSITIONS, QR_STYLES
+import beatsound
+from render import beat
 from render.timer import CLOCK_STYLES, parse_countdown_format
 from backgrounds import (
     BACKGROUNDS_DIR, BACKGROUND_ID_RE, BACKGROUNDS_PER_TIMER_MAX)
@@ -214,7 +216,57 @@ def _validate_countdown_options(options):
         "millis_60fps": millis_60fps,
     }
     clean.update(_timer_background_options(options))
+    clean.update(_beat_opener_options(options, clean, total))
     return clean
+
+
+def _beat_opener_options(options, clean, total):
+    """Beat opener (docs/specs/beat-opener.md). BPM and key are only
+    checked while it is on: a leftover bad BPM in a hidden field must not
+    block a plain timer (docs/user-flows.md rule 4). The refusals below
+    are the combinations the UI disables, so they only fire for a caller
+    that skipped the UI -- the screen flashing white and black IS the
+    background, and the beat needs 60 fps."""
+    opener = options.get("beat_opener", False)
+    if not isinstance(opener, bool):
+        raise ValidationError('"Beat opener" must be true or false.')
+    if not opener:
+        return {"beat_opener": False, "bpm": beat.BPM_DEFAULT,
+                "key": beat.KEY_DEFAULT, "beat_sound": "builtin"}
+    bpm = _int_field(options, "bpm", beat.BPM_MIN, beat.BPM_MAX,
+                     beat.BPM_DEFAULT, "BPM")
+    key = options.get("key", beat.KEY_DEFAULT)
+    if key not in beat.KEYS:
+        raise ValidationError(
+            "Key must be one of {0}.".format(", ".join(beat.KEYS)))
+    if clean["style"] != "classic":
+        raise ValidationError(
+            "The beat opener only works with the CLASSIC style.")
+    if clean["transparent"]:
+        raise ValidationError(
+            "The beat opener can't be combined with TRANSPARENT.")
+    if clean["green_screen"]:
+        raise ValidationError(
+            "The beat opener can't be combined with GREEN SCREEN.")
+    if clean["backgrounds"]:
+        raise ValidationError(
+            "The beat opener flashes the whole screen, so it can't use "
+            "background images.")
+    if total > beat.MAX_SECONDS:
+        raise ValidationError(
+            "With the beat opener on, the timer can run for at most "
+            "15 minutes.")
+    # docs/specs/beat-opener.md "Your own sound": checked here, not at
+    # render time, so a missing sound is an error under the field rather
+    # than a failed export a minute later.
+    sound = options.get("beat_sound", "builtin")
+    if sound not in ("builtin", "mine"):
+        raise ValidationError('Sound must be "builtin" or "mine".')
+    if sound == "mine" and not beatsound.status()["present"]:
+        raise ValidationError(
+            "Upload your sound first, or switch back to the built-in tone.")
+    return {"beat_opener": True, "bpm": bpm, "key": key,
+            "beat_sound": sound}
 
 
 def _millis_reveal_seconds_field(options):

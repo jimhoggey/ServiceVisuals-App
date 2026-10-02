@@ -402,6 +402,35 @@ button.tile:active { transform: translateY(0); }
 }
 .advanced .group { margin-top: 0; }
 
+/* Beat opener: BPM and KEY side by side, bottoms aligned like the
+   Duration row. The key select is the one wide control, so it takes the
+   remaining width instead of the number field's fixed 96px. */
+.beat-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  margin-top: 12px;
+}
+.beat-key { flex: 1 1 auto; min-width: 0; }
+
+/* Your own sound: the SOUND label matches BPM/KEY above it (same small
+   caps), the choice is the same segmented control the style rows use, and
+   the upload row reuses the background picker's button + status look. */
+.beat-sound { margin-top: 14px; }
+.beat-sound-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--ink-faint);
+}
+#timer-beat-mine { margin-top: 12px; }
+.beat-mine-row { gap: 14px; }
+/* Amber, not red: a note that differs from the key is worth a second look
+   but never blocks the export. */
+.hint.is-warn { color: var(--accent); }
+
 /* Status line + REMOVE side by side on the download tile. */
 .tools-row {
   display: flex;
@@ -637,6 +666,14 @@ textarea:focus {
   outline-offset: 2px;
 }
 
+/* RING and BAR while the beat opener is on: same 0.45 as .btn:disabled,
+   so a card that cannot be picked reads like a button that cannot. */
+.style-opt input:disabled + .style-card {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.style-opt input:disabled + .style-card:hover { border-color: var(--line-2); }
+
 .style-name {
   font-size: 10px;
   font-weight: 600;
@@ -769,6 +806,9 @@ input[type="color"] {
    with just the box dimmed their labels read exactly like the live
    "Fixed 00:00:00 format" beside them. Same 0.45 as .btn:disabled. */
 .check-row input:disabled + label { opacity: 0.45; cursor: not-allowed; }
+/* Accent swatches while the beat opener is on: they would change nothing
+   (black digits on white), so they must look it -- rule 3. */
+#timer-accent-group.is-off .swatch-row { opacity: 0.45; pointer-events: none; }
 .check-row input[type="checkbox"] {
   width: 18px; height: 18px;
   accent-color: var(--accent);

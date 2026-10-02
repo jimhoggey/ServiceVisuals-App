@@ -189,6 +189,10 @@
                 </span>
               </label>
             </div>
+            <!-- Said HERE, next to the greyed-out cards: the Beat opener
+                 tick that causes it sits far below in ADVANCED, and the
+                 UX review found nobody connects the two. -->
+            <p class="hint" id="timer-style-beat-hint" hidden>The beat opener uses the classic look. Ring and bar come back when you untick it.</p>
           </fieldset>
 
           <fieldset class="group" id="timer-duration-group">
@@ -273,8 +277,9 @@
           </fieldset>
 
 
-          <fieldset class="group">
+          <fieldset class="group" id="timer-accent-group">
             <legend>Accent colour</legend>
+            <p class="hint" id="timer-accent-beat-hint" hidden>The beat opener always draws black digits on white.</p>
             <div class="swatch-row">
               <label class="swatch">
                 <input class="vh" type="radio" name="timer-accent" id="timer-acc-1" value="#e8b44f" checked>
@@ -505,6 +510,71 @@
                 <label for="timer-millis-60fps">Smoother milliseconds (60 fps)</label>
               </div>
               <p class="hint" id="timer-millis-60fps-hint">Turn this on when the ticking numbers are the whole point &#8212; a dramatic final countdown viewed up close. It roughly doubles render time and makes the file about 50% bigger. Only helps if your editor also exports at 60 fps: export at 30 and the extra frames are thrown away.</p>
+              </div>
+            </fieldset>
+            <!-- Beat opener (spec: docs/specs/beat-opener.md): countdown
+                 only -- applyTimerMode() hides the whole group in clock
+                 mode, where none of it is sent. The fields appear only
+                 while the box is ticked (applyTimerMode() too). -->
+            <fieldset class="group" id="timer-beat-group">
+              <legend>Beat opener</legend>
+              <div class="check-row">
+                <input type="checkbox" id="timer-beat">
+                <label for="timer-beat">Beat opener</label>
+              </div>
+              <p class="hint">Flashes the screen and plays a note on the beat, so the band comes in at 0:00 in time and in key.</p>
+              <div id="timer-beat-fields" hidden>
+                <div class="beat-row">
+                  <div class="num-field">
+                    <label for="timer-bpm">BPM</label>
+                    <input type="number" id="timer-bpm" inputmode="numeric" min="60" max="200" step="1" value="120">
+                  </div>
+                  <div class="num-field beat-key">
+                    <label for="timer-key">KEY</label>
+                    <select id="timer-key">
+                      <option value="C">C</option>
+                      <option value="C#">C&#9839; / D&#9837;</option>
+                      <option value="D">D</option>
+                      <option value="D#">D&#9839; / E&#9837;</option>
+                      <option value="E">E</option>
+                      <option value="F">F</option>
+                      <option value="F#">F&#9839; / G&#9837;</option>
+                      <option value="G">G</option>
+                      <option value="G#">G&#9839; / A&#9837;</option>
+                      <option value="A" selected>A</option>
+                      <option value="A#">A&#9839; / B&#9837;</option>
+                      <option value="B">B</option>
+                    </select>
+                  </div>
+                </div>
+                <p class="hint" id="timer-beat-hint">Use the song's BPM and key &#8212; ask the band. The note is the key's root, so major or minor doesn't matter.</p>
+                <!-- Your own sound (spec: docs/specs/beat-opener.md,
+                     addendum). Built-in stays the default. The upload
+                     controls show only for "My sound"; timer.js keeps
+                     them in step with GET /api/beat-sound. -->
+                <div class="beat-sound">
+                  <span class="beat-sound-label" id="timer-beat-sound-label">SOUND</span>
+                  <div class="seg-group" role="radiogroup" aria-labelledby="timer-beat-sound-label">
+                    <label class="seg">
+                      <input class="vh" type="radio" name="timer-beat-sound" id="timer-beat-sound-builtin" value="builtin" checked>
+                      <span>BUILT-IN TONE</span>
+                    </label>
+                    <label class="seg">
+                      <input class="vh" type="radio" name="timer-beat-sound" id="timer-beat-sound-mine" value="mine">
+                      <span>MY SOUND</span>
+                    </label>
+                  </div>
+                </div>
+                <div id="timer-beat-mine" hidden>
+                  <div class="bg-row beat-mine-row">
+                    <label class="btn btn-file" for="timer-beat-sound-file">UPLOAD SOUND&#8230;</label>
+                    <input class="vh" type="file" id="timer-beat-sound-file" accept="audio/*,.wav,.mp3,.m4a">
+                    <button type="button" class="link-btn" id="timer-beat-sound-remove" hidden>REMOVE</button>
+                  </div>
+                  <p class="hint" id="timer-beat-sound-status" role="status"></p>
+                  <p class="hint" id="timer-beat-sound-note" hidden></p>
+                  <p class="hint">A pad or a single hit works best. It plays as recorded on every beat, so it should already be in the song's key.</p>
+                </div>
               </div>
             </fieldset>
             <fieldset class="group" id="timer-options-group">

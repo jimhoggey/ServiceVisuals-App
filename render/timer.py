@@ -30,7 +30,7 @@ from collections import OrderedDict
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from . import fonts
+from . import beat, fonts
 from .encoder import (
     WIDTH, HEIGHT, ALPHA_FORMATS, encode_parallel, export_path)
 
@@ -553,12 +553,22 @@ def parse_countdown_format(text):
         return None
     main, dot, ms = text.partition(".")
     ms_digits = 0
+    ms_sep = "."
     if dot:
         # The millis part has to be the LAST thing, so anything after the
         # dot that isn't zeros -- a second dot, a letter -- is this error.
         if not 1 <= len(ms) <= 3 or ms.strip("0"):
             raise ValueError(FORMAT_ERR_MILLIS)
         ms_digits = len(ms)
+    else:
+        # A colon works too (docs/specs/beat-opener.md, FORMAT addendum):
+        # conference timers write 00:00:10:30. Zeros can only mean
+        # milliseconds, so a last group of them is unambiguous.
+        head, colon, tail = main.rpartition(":")
+        if colon and tail and not tail.strip("0"):
+            if len(tail) > 3:
+                raise ValueError(FORMAT_ERR_MILLIS)
+            main, ms_digits, ms_sep = head, len(tail), ":"
     main = main.upper()
     if not _FORMAT_CHARS_RE.fullmatch(main):
         raise ValueError(FORMAT_ERR_CHARS)
@@ -574,7 +584,8 @@ def parse_countdown_format(text):
         raise ValueError(FORMAT_ERR_WIDE)
     return {"units": [(g[0], len(g)) for g in groups],
             "ms_digits": ms_digits,
-            "text": main + ("." + "0" * ms_digits if ms_digits else "")}
+            "ms_sep": ms_sep,
+            "text": main + (ms_sep + "0" * ms_digits if ms_digits else "")}
 
 
 def _format_with_units(rem, units):
@@ -591,10 +602,11 @@ def _format_with_units(rem, units):
     return ":".join(parts)
 
 
-def _millis_text(rem_ms, ms_digits):
+def _millis_text(rem_ms, ms_digits, sep="."):
     """".873" / ".87" / ".8" -- truncated, never rounded, so the run never
-    shows the next second's value on the last frame of this one."""
-    return "." + "{0:03d}".format(rem_ms % 1000)[:ms_digits]
+    shows the next second's value on the last frame of this one. `sep` is
+    whichever separator the volunteer typed (":873" for M:SS:000)."""
+    return sep + "{0:03d}".format(rem_ms % 1000)[:ms_digits]
 
 
 def _format_remaining(rem, total, fixed=False, layout=None):
@@ -1051,12 +1063,24 @@ def render_timer(options, progress_cb):
     if layout is not None:
         show_millis = layout["ms_digits"] > 0
     ms_digits = layout["ms_digits"] if layout is not None else 3
+    ms_sep = layout["ms_sep"] if layout is not None else "."
     # docs/specs/millis-60fps.md: accepted regardless of show_millis, like
     # fixed_format/millis_full_size/millis_reveal below — simply inert
     # when millis are off, since _millis_fps is only called inside the
     # `if show_millis` branch two lines down.
     millis_60fps = bool(options.get("millis_60fps", False))
-    if show_millis:
+    # Beat opener (docs/specs/beat-opener.md): always classic, always
+    # 60 fps -- a flash edge has to land on its beat, and at 15 fps out it
+    # could be 66 ms late, which a drummer counting in hears as late.
+    opener = bool(options.get("beat_opener", False))
+    bpm = max(beat.BPM_MIN, min(beat.BPM_MAX, _to_int(
+        options.get("bpm"), beat.BPM_DEFAULT)))
+    key = options.get("key") if options.get("key") in beat.KEYS \
+        else beat.KEY_DEFAULT
+    if opener:
+        style = "classic"
+        fps = out_fps = _millis_fps(True)
+    elif show_millis:
         # input_fps == output_fps, always: 30-in/60-out would only
         # duplicate frames, not smooth them (_millis_fps's docstring; the
         # spec's Frame rate rules). No mid-file fps switch either — one
@@ -1108,7 +1132,7 @@ def render_timer(options, progress_cb):
         options.get("millis_reveal_seconds"), 60)))
 
     initial_text = _format_remaining(total, total, fixed, layout)
-    ms_sample = "." + "0" * ms_digits
+    ms_sample = ms_sep + "0" * ms_digits
     if style == "ring":
         size, digits_cy = 190, RING_CY
     elif style == "bar":
@@ -1165,7 +1189,8 @@ def render_timer(options, progress_cb):
             # itself, rather than millis_full_size/millis_reveal's (purely
             # cosmetic refinements, no marker).
             "_60fps" if (show_millis and millis_60fps) else "",
-            _bg_descriptor_suffix(options)),
+            _bg_descriptor_suffix(options) +
+            (beat.filename_marker(bpm, key) if opener else "")),
         ext=_export_ext(options))
 
     # Digit bases (a plate + digits for one displayed second) are shared by
@@ -1268,7 +1293,7 @@ def render_timer(options, progress_cb):
                 # too) — the "." gets its own narrow slot via
                 # _digits_metrics/_slot_width, same as everywhere else a
                 # dot is drawn.
-                ms_text = _millis_text(rem_ms, ms_digits)
+                ms_text = _millis_text(rem_ms, ms_digits, ms_sep)
                 block = _render_clock_block(main_text, ms_text, "", color,
                                             color, met, met_ms, None, 0)
                 base = plates[idx].copy()
@@ -1296,7 +1321,60 @@ def render_timer(options, progress_cb):
     # (a 5-minute timer at 30 fps meant 9000 encoded frames). Millis mode
     # uses 30/30 (set above) so every unique ms value actually gets its own
     # encoded frame instead of being smeared across duplicated output frames.
-    encode_parallel(out_path, fps, total_frames, make_frame, progress_cb,
+    if opener:
+        # Beat opener (docs/specs/beat-opener.md): a separate frame
+        # function rather than branches inside make_frame above, so the
+        # ordinary countdown's frames cannot be touched by this feature.
+        # No caches: a black beat is one shared frame, and a white beat's
+        # digits change every frame when milliseconds show.
+        white = Image.new("RGB", (WIDTH, HEIGHT), beat.WHITE)
+        black = Image.new("RGB", (WIDTH, HEIGHT), beat.BLACK)
+
+        def opener_frame(i):
+            if not beat.screen_is_white(i, fps, total, bpm):
+                return black
+            base = white.copy()
+            if show_millis:
+                rem_ms = max(0, total * 1000 - int(round(i * 1000.0 / fps)))
+                ms_text = (_millis_text(rem_ms, ms_digits, ms_sep)
+                           if _millis_ticking(rem_ms, millis_reveal,
+                                              millis_reveal_seconds)
+                           else ms_sample)
+                block = _render_clock_block(
+                    _format_remaining(rem_ms // 1000, total, fixed, layout),
+                    ms_text, "", beat.INK, beat.INK, met, met_ms, None, 0)
+            else:
+                # Whole seconds the way the plain countdown shows them:
+                # the total for the whole first second, not total - 1.
+                rem = total - i // fps
+                block = _render_digits(
+                    _format_remaining(rem, total, fixed, layout),
+                    beat.INK, met)
+            _paste_digits(base, block, WIDTH // 2 - block.width // 2,
+                          digits_cy - block.height // 2, False)
+            return base
+
+    encode_parallel(out_path, fps, total_frames,
+                    opener_frame if opener else make_frame, progress_cb,
                     output_fps=out_fps,
                     alpha_format=options.get("transparent") or None)
+    if opener:
+        own = None
+        if options.get("beat_sound") == "mine":
+            # Imported here: the stored clip lives with the user's data
+            # (~/.service-visuals), outside the render package. Validation
+            # already refused "mine" with nothing stored; if it vanished
+            # since, the built-in tone is a better export than a failure.
+            import beatsound
+            own = beatsound.load()
+        try:
+            beat.add_sound(out_path, total, bpm, key,
+                           total_frames / float(fps), own_sound=own)
+        except Exception:
+            # The silent video is already in place under its final name.
+            # Left there it looks like a good export with nothing in its
+            # name to say it has no sound -- remove it so a failure leaves
+            # no file, and the job reports the error.
+            beat.unlink_quietly(out_path)
+            raise
     return os.path.basename(out_path)

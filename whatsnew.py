@@ -29,6 +29,14 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.42.0": [
+        "Timer: Beat opener under ADVANCED — the screen flashes on the "
+        "song's beat, with sound.",
+        "Enter the BPM and key, and 0:00 lands on a beat so the band comes "
+        "in on time.",
+        "Upload your band's own sound with MY SOUND — it plays on every "
+        "beat.",
+    ],
     "1.41.0": [
         "Timer: type the layout you want under ADVANCED — M:SS.000 shows "
         "0:20.000.",
