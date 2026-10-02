@@ -29,6 +29,12 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.43.0": [
+        "Beat opener: pick the part of your sound that plays — drag the "
+        "window on its waveform.",
+        "Press PLAY to hear exactly that part before you export.",
+        "Your uploaded sound now clears each time you open the countdown.",
+    ],
     "1.42.0": [
         "Timer: Beat opener under ADVANCED — the screen flashes on the "
         "song's beat, with sound.",
