@@ -29,6 +29,13 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.44.0": [
+        "Timer: drag the numbers on the preview to place them — great for "
+        "a gap in your artwork.",
+        "Accent colours now colour the numbers too. Pick WHITE to keep "
+        "them white.",
+        "Background images are no longer dimmed unless you ask for it.",
+    ],
     "1.43.0": [
         "Beat opener: pick the part of your sound that plays — drag the "
         "window on its waveform.",
