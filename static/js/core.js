@@ -351,7 +351,9 @@
     var customWrap = custom.closest(".swatch-custom");
     radios.forEach(function (r) {
       r.addEventListener("change", function () {
-        custom.value = r.value;
+        // The timer's WHITE swatch has the value "white" (it means "leave
+        // the numbers white"), which a colour input can't hold.
+        if (r.value.charAt(0) === "#") custom.value = r.value;
         customWrap.classList.remove("is-active");
         onChange();
       });

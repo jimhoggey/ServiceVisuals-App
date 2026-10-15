@@ -866,6 +866,28 @@ input[type="color"] {
 /* Accent swatches while the beat opener is on: they would change nothing
    (black digits on white), so they must look it -- rule 3. */
 #timer-accent-group.is-off .swatch-row { opacity: 0.45; pointer-events: none; }
+
+/* Placed digits (docs/specs/timer-position.md): SIZE slider + CENTRE. */
+.place-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.place-row label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--ink-faint);
+}
+.place-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.place-value {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  min-width: 3.5em;
+  text-align: right;
+}
 .check-row input[type="checkbox"] {
   width: 18px; height: 18px;
   accent-color: var(--accent);

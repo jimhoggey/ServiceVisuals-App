@@ -41,6 +41,7 @@ BG_BASE = (14, 16, 19)           # #0e1013
 BG_EDGE = (7, 8, 10)             # #07080a  (vignette edges)
 TRACK = (35, 38, 43)             # #23262b  (inactive ring/bar track)
 DIGITS_COLOR = (242, 240, 235)   # #f2f0eb
+WARN_RED = (226, 114, 91)        # #e2725b, the red accent swatch
 DEFAULT_ACCENT = (232, 180, 79)  # #e8b44f
 
 STYLES = ("classic", "ring", "bar")
@@ -75,6 +76,25 @@ def _to_int(value, default):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _to_unit(value, default):
+    """A 0..1 fraction (docs/specs/timer-position.md), else `default`."""
+    if isinstance(value, bool):
+        return default
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return default
+    return value if 0.0 <= value <= 1.0 else default
+
+
+def _place(centre, extent, frame):
+    """Top/left of a block `extent` wide centred on `centre`, moved in
+    just far enough to stay wholly inside `frame`. At the frame's middle
+    this is exactly `frame // 2 - extent // 2`, the placement every
+    countdown used before the digits could be moved."""
+    return max(0, min(frame - extent, centre - extent // 2))
 
 
 def _parse_hex(value, default):
@@ -203,7 +223,7 @@ def _plates(options, style, accent):
     same as before this feature existed.
     """
     paths = options.get("backgrounds") or []
-    bg_dim = options.get("bg_dim", 45)
+    bg_dim = options.get("bg_dim", 0)       # matches validation's default
     bg_blur = bool(options.get("bg_blur", False))
 
     if options.get("transparent"):
@@ -1042,6 +1062,17 @@ def render_timer(options, progress_cb):
         style = "classic"
     accent = _parse_hex(options.get("accent"), DEFAULT_ACCENT)
     warn_last10 = bool(options.get("warn_last10", True))
+    # Coloured numbers (docs/specs/timer-position.md, "Number colour"): the
+    # accent swatches colour the numbers too; the WHITE swatch (default)
+    # sends no digits_color, and then both colours below are exactly what
+    # they always were. With the numbers coloured, the accent can't also
+    # be the last-10-seconds warning (it wouldn't change), so the warning
+    # goes red -- or white, if the numbers are already that red.
+    digits_rgb = DIGITS_COLOR
+    warn_rgb = accent
+    if options.get("digits_color"):
+        digits_rgb = _parse_hex(options.get("digits_color"), DIGITS_COLOR)
+        warn_rgb = WARN_RED if digits_rgb != WARN_RED else DIGITS_COLOR
     hold = max(0, min(30, _to_int(options.get("hold_seconds"), 5)))
     # Addendum (v1.23.0): the same millis toggle clock mode uses, now also
     # accepted on a countdown. Every frame's ms differs, so the per-second
@@ -1176,6 +1207,19 @@ def render_timer(options, progress_cb):
         else:
             size = _clock_font_size(initial_text, True, False,
                                     ms_scale=ms_scale, ms_sample=ms_sample)
+    # Placed digits (docs/specs/timer-position.md): the volunteer drags the
+    # classic numbers into a gap in their background and sizes them to
+    # fit. Classic only -- ring and bar are drawn around fixed centres.
+    # At the defaults (centre, 100 %) nothing below changes: size is
+    # untouched and _place() returns exactly the old centred position.
+    digits_cx = WIDTH // 2
+    if style == "classic":
+        scale = max(20, min(100, _to_int(options.get("digits_size"), 100)))
+        if scale != 100:
+            size = max(20, int(round(size * scale / 100.0)))
+        digits_cx = int(round(WIDTH * _to_unit(options.get("digits_x"), 0.5)))
+        digits_cy = int(round(HEIGHT * _to_unit(options.get("digits_y"),
+                                                 0.5)))
     met = _digits_metrics(size)
     met_ms = _digits_metrics(_millis_size(size, millis_full_size)) \
         if show_millis else None
@@ -1205,7 +1249,7 @@ def render_timer(options, progress_cb):
     bases_cap = 16 * min(4, n_plates)
 
     def base_for(rem, idx):
-        color = accent if (warn_last10 and rem <= 10) else DIGITS_COLOR
+        color = warn_rgb if (warn_last10 and rem <= 10) else digits_rgb
         text = _format_remaining(rem, total, fixed, layout)
         key = (text, color, idx)
         with bases_lock:
@@ -1216,8 +1260,8 @@ def render_timer(options, progress_cb):
         block = _render_digits(text, color, met)
         base = plates[idx].copy()
         _paste_digits(base, block,
-                      WIDTH // 2 - block.width // 2,
-                      digits_cy - block.height // 2, has_bg,
+                      _place(digits_cx, block.width, WIDTH),
+                      _place(digits_cy, block.height, HEIGHT), has_bg,
                       alpha=is_alpha)
         with bases_lock:
             bases[key] = base
@@ -1243,7 +1287,7 @@ def render_timer(options, progress_cb):
         # millis digits carry no real sub-second information during the
         # freeze, so there is no reason for their colour to change at
         # sub-second precision either.
-        color = accent if (warn_last10 and rem <= 10) else DIGITS_COLOR
+        color = warn_rgb if (warn_last10 and rem <= 10) else digits_rgb
         text = _format_remaining(rem, total, fixed, layout)
         key = (text, color, idx)
         with frozen_bases_lock:
@@ -1255,8 +1299,8 @@ def render_timer(options, progress_cb):
                                     met, met_ms, None, 0)
         base = plates[idx].copy()
         _paste_digits(base, block,
-                      WIDTH // 2 - block.width // 2,
-                      digits_cy - block.height // 2, has_bg,
+                      _place(digits_cx, block.width, WIDTH),
+                      _place(digits_cy, block.height, HEIGHT), has_bg,
                       alpha=is_alpha)
         with frozen_bases_lock:
             frozen_bases[key] = base
@@ -1284,8 +1328,8 @@ def render_timer(options, progress_cb):
                 # moves at the threshold.
                 base = frozen_base_for(rem_ms // 1000, idx)
             else:
-                color = (accent if (warn_last10 and rem_ms <= 10_000)
-                        else DIGITS_COLOR)
+                color = (warn_rgb if (warn_last10 and rem_ms <= 10_000)
+                        else digits_rgb)
                 main_text = _format_remaining(rem_ms // 1000, total, fixed,
                                               layout)
                 # Leading "." makes this the same "small run" shape clock
@@ -1298,8 +1342,8 @@ def render_timer(options, progress_cb):
                                             color, met, met_ms, None, 0)
                 base = plates[idx].copy()
                 _paste_digits(base, block,
-                              WIDTH // 2 - block.width // 2,
-                              digits_cy - block.height // 2, has_bg,
+                              _place(digits_cx, block.width, WIDTH),
+                              _place(digits_cy, block.height, HEIGHT), has_bg,
                               alpha=is_alpha)
         else:
             elapsed = int(t)
@@ -1350,8 +1394,8 @@ def render_timer(options, progress_cb):
                 block = _render_digits(
                     _format_remaining(rem, total, fixed, layout),
                     beat.INK, met)
-            _paste_digits(base, block, WIDTH // 2 - block.width // 2,
-                          digits_cy - block.height // 2, False)
+            _paste_digits(base, block, _place(digits_cx, block.width, WIDTH),
+                          _place(digits_cy, block.height, HEIGHT), False)
             return base
 
     encode_parallel(out_path, fps, total_frames,

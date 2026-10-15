@@ -193,6 +193,28 @@
                  tick that causes it sits far below in ADVANCED, and the
                  UX review found nobody connects the two. -->
             <p class="hint" id="timer-style-beat-hint" hidden>The beat opener uses the classic look. Ring and bar come back when you untick it.</p>
+            <!-- Placed digits (spec: docs/specs/timer-position.md): CLASSIC
+                 countdowns only -- applyTimerMode() hides it otherwise.
+                 x/y are fractions of the frame, written by dragging the
+                 numbers on the preview; hidden inputs so the form's own
+                 input event still redraws. -->
+            <div id="timer-place">
+              <p class="hint">Drag the numbers on the preview to place them &#8212; handy for a gap in your background. They're white, so a darker spot reads best.</p>
+              <div class="place-row">
+                <label for="timer-digits-size">SIZE</label>
+                <input type="range" id="timer-digits-size" min="20" max="100" step="1" value="100">
+                <span class="place-value" id="timer-digits-size-value">100%</span>
+                <!-- RESET, not CENTRE: it puts back the size as well, and a
+                     label naming one effect mustn't quietly change a second
+                     setting (UX review). -->
+                <button type="button" class="link-btn" id="timer-digits-centre">RESET</button>
+              </div>
+              <input type="hidden" id="timer-digits-x" value="0.5">
+              <input type="hidden" id="timer-digits-y" value="0.5">
+            </div>
+            <!-- Said where the controls were, so RING/BAR doesn't read as
+                 "my placement was lost" (UX review). -->
+            <p class="hint" id="timer-place-off" hidden>Placing the numbers works with the Classic style &#8212; your placement comes back when you pick it again.</p>
           </fieldset>
 
           <fieldset class="group" id="timer-duration-group">
@@ -281,8 +303,16 @@
             <legend>Accent colour</legend>
             <p class="hint" id="timer-accent-beat-hint" hidden>The beat opener always draws black digits on white.</p>
             <div class="swatch-row">
+              <!-- WHITE (spec: docs/specs/timer-position.md "Number colour"):
+                   the default, and exactly today's look -- white numbers,
+                   amber ring/bar and warning. Any other swatch colours the
+                   numbers too. -->
               <label class="swatch">
-                <input class="vh" type="radio" name="timer-accent" id="timer-acc-1" value="#e8b44f" checked>
+                <input class="vh" type="radio" name="timer-accent" id="timer-acc-white" value="white" checked>
+                <span class="swatch-dot" style="--c:#f2f0eb"></span><span class="vh">White</span>
+              </label>
+              <label class="swatch">
+                <input class="vh" type="radio" name="timer-accent" id="timer-acc-1" value="#e8b44f">
                 <span class="swatch-dot" style="--c:#e8b44f"></span><span class="vh">Amber</span>
               </label>
               <label class="swatch">
@@ -306,6 +336,7 @@
                 <span>CUSTOM</span>
               </label>
             </div>
+            <p class="hint" id="timer-accent-hint">White keeps the numbers white. Pick a colour to colour the numbers too.</p>
           </fieldset>
 
           <fieldset class="group" id="timer-bg-group">
@@ -425,8 +456,10 @@
             <div class="range-field">
               <label for="timer-bg-dim">DIM</label>
               <div class="range-row">
-                <input type="range" id="timer-bg-dim" min="0" max="80" step="1" value="45">
-                <span class="range-value" id="timer-bg-dim-value">45%</span>
+                <!-- Default 0: the owner's backgrounds are finished artwork;
+                     a 45 % dim greyed a white speech bubble out. -->
+                <input type="range" id="timer-bg-dim" min="0" max="80" step="1" value="0">
+                <span class="range-value" id="timer-bg-dim-value">0%</span>
               </div>
             </div>
             <p class="hint">Darkens the image so the numbers stay readable.</p>

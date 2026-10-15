@@ -741,9 +741,11 @@ def check_clock_validation():
                 "fixed_format": False, "display_format": "",
                 "beat_opener": False, "bpm": 120, "key": "A",
                 "beat_sound": "builtin",
+                "digits_x": 0.5, "digits_y": 0.5, "digits_size": 100,
+                "digits_color": "",
                 "millis_full_size": False, "millis_reveal": False,
                 "millis_reveal_seconds": 60, "millis_60fps": False,
-                "backgrounds": [], "bg_seconds": 10, "bg_dim": 45,
+                "backgrounds": [], "bg_seconds": 10, "bg_dim": 0,
                 "bg_blur": False, "green_screen": False,
                 "transparent": False}
     clean = validation.validate_timer_options(countdown)
@@ -2931,6 +2933,113 @@ def check_beat_opener():
             os.unlink(path)
 
 
+def check_digits_placement():
+    """docs/specs/timer-position.md: the classic digits can be placed and
+    sized. Validation, the on-screen clamp, and a real frame whose digits
+    sit where they were put. Defaults staying byte-identical is golden's
+    and the old-vs-new comparison's job."""
+    from PIL import Image
+    from render.timer import _place, render_timer
+    from validation import ValidationError, validate_timer_options
+    print("Timer: placed digits")
+
+    check("the centre placement is exactly the old centring",
+          all(_place(960, w, 1920) == 960 - w // 2
+              for w in (1, 401, 1600, 1919, 1920)))
+    check("a block pushed off an edge is moved back on screen",
+          _place(0, 400, 1920) == 0 and _place(1920, 400, 1920) == 1520)
+
+    base = {"minutes": 0, "seconds": 6}
+    clean = validate_timer_options(dict(base, digits_x=0.25, digits_y=0.6,
+                                        digits_size=40))
+    check("a placement validates",
+          (clean["digits_x"], clean["digits_y"], clean["digits_size"])
+          == (0.25, 0.6, 40), repr(clean))
+    for extra, message in (
+            ({"digits_x": 1.5}, "Position must be a number from 0 to 1."),
+            ({"digits_y": "top"}, "Position must be a number from 0 to 1."),
+            ({"digits_x": True}, "Position must be a number from 0 to 1."),
+            ({"digits_size": 10},
+             "Size must be a whole number between 20 and 100.")):
+        try:
+            validate_timer_options(dict(base, **extra))
+            check("refused: {0}".format(extra), False, "no error")
+        except ValidationError as exc:
+            check("refused: {0}".format(extra), str(exc) == message,
+                  str(exc))
+
+    def digits_bbox(options):
+        name = render_timer(validate_timer_options(options), lambda p: None)
+        path = os.path.join(EXPORTS_DIR, name)
+        tmp = tempfile.mkdtemp(prefix="sv-smoke-place-")
+        try:
+            png = os.path.join(tmp, "f.png")
+            subprocess.run([FFMPEG, "-y", "-v", "error", "-i", path,
+                            "-frames:v", "1", png],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            # The digits are near-white on the dark vignette.
+            mask = Image.open(png).convert("L").point(
+                lambda v: 255 if v > 180 else 0)
+            return mask.getbbox()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+            if os.path.exists(path):
+                os.unlink(path)
+
+    centred = digits_bbox(dict(base, style="classic", hold_seconds=0))
+    placed = digits_bbox(dict(base, style="classic", hold_seconds=0,
+                              digits_x=0.25, digits_y=0.3, digits_size=40))
+    if centred and placed:
+        cx = (placed[0] + placed[2]) / 2.0
+        cy = (placed[1] + placed[3]) / 2.0
+        check("placed digits sit where they were put (25 % across, "
+              "30 % down)", abs(cx - 480) < 30 and abs(cy - 324) < 30,
+              "centre ({0:.0f}, {1:.0f})".format(cx, cy))
+        check("and are drawn at 40 % of the size",
+              abs((placed[2] - placed[0]) /
+                  float(centred[2] - centred[0]) - 0.4) < 0.05,
+              "{0} vs {1}".format(placed, centred))
+    else:
+        check("digits found in the rendered frames", False,
+              "{0!r} / {1!r}".format(centred, placed))
+    # Coloured numbers: a blue swatch paints the numbers blue (before the
+    # final 10 s -- a 20 s timer's first frame).
+    name = render_timer(validate_timer_options(dict(
+        base, seconds=20, style="classic", hold_seconds=0,
+        accent="#5aa9e6", digits_color="#5aa9e6")), lambda p: None)
+    path = os.path.join(EXPORTS_DIR, name)
+    tmp = tempfile.mkdtemp(prefix="sv-smoke-colour-")
+    try:
+        png = os.path.join(tmp, "f.png")
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-i", path,
+                        "-frames:v", "1", png], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        im = Image.open(png).convert("RGB")
+        # The brightest-blue pixel in the middle band is a digit's.
+        band = im.crop((300, 400, 1620, 680)).getdata()
+        best = max(band, key=lambda p: p[2] - p[0])
+        check("a blue swatch colours the numbers blue",
+              best[2] > 180 and best[2] - best[0] > 80, repr(best))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        if os.path.exists(path):
+            os.unlink(path)
+    try:
+        validate_timer_options(dict(base, digits_color="blue"))
+        check("a bad number colour is refused", False, "no error")
+    except ValidationError as exc:
+        check("a bad number colour is refused",
+              str(exc) == 'Number colour must be a 6-digit hex color like '
+                          '"#e8b44f".', str(exc))
+
+    edge = digits_bbox(dict(base, style="classic", hold_seconds=0,
+                            digits_x=1.0, digits_y=0.0, digits_size=50))
+    check("digits placed at a corner stay wholly on screen",
+          edge is not None and edge[1] >= 0 and edge[2] <= 1920
+          and edge[2] > 1800, repr(edge))
+
+
 def check_beat_sound():
     """docs/specs/beat-opener.md "Your own sound": upload, trim, note
     detection, the API, validation, and a render that places the clip on
@@ -4190,6 +4299,7 @@ def main():
     check_countdown_format()
     check_beat_opener()
     check_beat_sound()
+    check_digits_placement()
     check_ai_model_routing()
     print()
     check_millis_size_and_ticking()

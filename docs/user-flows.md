@@ -303,6 +303,34 @@ directly under itself, in the same screenful as the disabled button; and a
 hidden invalid field never blocks the mode it is hidden in (an invalid
 format leaves Clock's Export enabled).
 
+### Placing the numbers
+
+STYLE → (CLASSIC only) drag the numbers on the preview, SIZE, RESET (spec:
+`docs/specs/timer-position.md`). The owner's case: a Summit graphic with a
+speech bubble that is obviously where the timer goes — "easy, that the user
+can drag the timer UI into this box".
+
+**Found and fixed** (scoped review, before release)
+- Switching to RING/BAR made the controls vanish with no reason; a line
+  now says placement is Classic-only and comes back.
+- CENTRE also reset SIZE; renamed RESET.
+- The hint now says the numbers are white, so a darker spot reads best.
+
+- The owner: clicking an accent colour did nothing to the numbers on a
+  classic countdown (it only ever coloured the warning) — fixed: a WHITE
+  swatch (default, today's look) plus colour swatches that paint the
+  numbers; with coloured numbers the warning is red.
+- The owner: uploading an image dimmed it 45 % by itself — Dim now
+  defaults to 0.
+
+**Found, not yet fixed**
+- The drag is discoverable only by the hint, a hover tooltip and the
+  grab cursor over the numbers.
+
+Rule confirmed: a control that disappears because of another choice
+leaves a one-line reason where it was, and a label naming one effect
+must not quietly change a second setting.
+
 ### Beat opener
 
 ADVANCED → **Beat opener** (spec: `docs/specs/beat-opener.md`). The

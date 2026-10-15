@@ -1563,7 +1563,13 @@
       key: $("timer-key").value || "A",
       // "builtin" unless the opener is on AND "My sound" is chosen.
       beatSound: beatSoundMineOn() ? "mine" : "builtin",
-      accent: currentAccent("timer"),
+      // WHITE (the default swatch) = today's look: white numbers, the
+      // amber accent for ring/bar and the warning. Any other choice is
+      // the accent AND the numbers' colour (docs/specs/timer-position.md).
+      accent: currentAccent("timer") === "white" ? "#e8b44f"
+                                                 : currentAccent("timer"),
+      digitsColor: currentAccent("timer") === "white" ? ""
+                                                      : currentAccent("timer"),
       warn: $("timer-warn").checked,
       hold: toInt($("timer-hold").value, 5),
       clockHours: toInt($("timer-clock-hours").value, 19),
@@ -1603,8 +1609,13 @@
       // construction — no separate case needed anywhere downstream.
       backgrounds: bgImagesOn() && !beat ? timerBg.ids.slice() : [],
       bgSeconds: toInt($("timer-bg-seconds").value, 10),
-      bgDim: toInt($("timer-bg-dim").value, 45),
-      bgBlur: $("timer-bg-blur").checked
+      bgDim: toInt($("timer-bg-dim").value, 0),
+      bgBlur: $("timer-bg-blur").checked,
+      // Placed digits (spec: docs/specs/timer-position.md).
+      digitsX: unitFrom($("timer-digits-x").value),
+      digitsY: unitFrom($("timer-digits-y").value),
+      digitsSize: Math.max(20, Math.min(100,
+          toInt($("timer-digits-size").value, 100)))
     };
   }
 
@@ -2077,8 +2088,16 @@
 
     var total = Math.max(0, t.minutes * 60 + t.seconds);
     var text = formatClock(total, total, false, t.formatLayout);
-    // renderer: accent digits whenever remaining <= 10s (first frame shown here)
-    var digitColor = (t.warn && total > 0 && total <= 10) ? t.accent : TEXT_LIGHT;
+    // Mirrors render_timer's digits_rgb/warn_rgb: the numbers in their
+    // colour (white unless a swatch other than WHITE is picked), and the
+    // warning colour whenever remaining <= 10s (first frame shown here) --
+    // the accent, or red (white if the numbers are that red) when the
+    // numbers are themselves coloured.
+    var numbersColor = t.digitsColor || TEXT_LIGHT;
+    var warnColor = !t.digitsColor ? t.accent
+        : (t.digitsColor.toLowerCase() === "#e2725b" ? TEXT_LIGHT : "#e2725b");
+    var digitColor = (t.warn && total > 0 && total <= 10) ? warnColor
+                                                          : numbersColor;
     // The opener never uses the warn colour; its digits are (17, 17, 17).
     if (t.beatOpener) digitColor = "#111111";
     // Addendum (v1.23.0): first frame is always the full total, so millis
@@ -2158,16 +2177,110 @@
       // as _clock_font_size(show_millis=True, has_tag=False) in timer.py.
       var w = clockCompositeWidth(ctx, text, millis, "", 100, msScale);
       var px = w > 0 ? Math.max(30, Math.min(200, Math.round(100 * 800 / w))) : 200;
+      // Placed digits (spec: docs/specs/timer-position.md): scaled, then
+      // centred where the volunteer dragged them, kept on screen.
+      px = placedSize(px, t.digitsSize);
+      var place = placeDigits(t, clockCompositeWidth(
+          ctx, text, millis, "", px, msScale), px);
       drawClockComposite(
-          ctx, text, millis, "", PW / 2, PH / 2, px, digitColor,
+          ctx, text, millis, "", place.cx, place.cy, px, digitColor,
           t.accent, t.backgrounds.length > 0, msScale);
     } else {
       // classic: auto-size to fit 1600px at 2x (800 here), capped at 200
       var ref = digitMetrics(ctx, 100);
       var w2 = clockWidth(text, ref);
       var px2 = w2 > 0 ? Math.max(30, Math.min(200, Math.round(100 * 800 / w2))) : 200;
-      drawClock(ctx, text, PW / 2, PH / 2, digitMetrics(ctx, px2), digitColor, t.backgrounds.length > 0);
+      px2 = placedSize(px2, t.digitsSize);
+      var met2 = digitMetrics(ctx, px2);
+      var place2 = placeDigits(t, clockWidth(text, met2), px2);
+      drawClock(ctx, text, place2.cx, place2.cy, met2, digitColor, t.backgrounds.length > 0);
     }
+  }
+
+  // ---- placed digits (spec: docs/specs/timer-position.md) ----------------
+  // The classic numbers can be dragged on the preview into a gap in the
+  // background (the owner's case: a speech bubble on a Summit graphic) and
+  // shrunk with SIZE. digitsBox is where they were last drawn, for the drag.
+  var digitsBox = null;
+  var digitsDrag = null;
+
+  function unitFrom(v) {
+    var n = parseFloat(v);
+    return (isFinite(n) && n >= 0 && n <= 1) ? n : 0.5;
+  }
+
+  // Mirrors render/timer.py: size x SIZE%, at least 20 px at full res
+  // (10 here, the preview being half size).
+  function placedSize(px, pct) {
+    return pct === 100 ? px : Math.max(10, Math.round(px * pct / 100));
+  }
+
+  // Mirrors _place(): centred on the dragged point, moved in just far
+  // enough to stay wholly on screen. Records the box for hit-testing.
+  function placeDigits(t, w, h) {
+    var cx = Math.min(Math.max(t.digitsX * PW, w / 2), PW - w / 2);
+    var cy = Math.min(Math.max(t.digitsY * PH, h / 2), PH - h / 2);
+    digitsBox = { x: cx - w / 2, y: cy - h / 2, w: w, h: h };
+    return { cx: cx, cy: cy };
+  }
+
+  function canvasPoint(e) {
+    var canvas = $("timer-canvas");
+    var r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * PW / r.width,
+             y: (e.clientY - r.top) * PH / r.height };
+  }
+
+  function canDragDigits() {
+    return !$("timer-place").hidden && !!digitsBox;
+  }
+
+  function overDigits(p) {
+    var pad = 12;      // forgiving: the numbers' own box is tight
+    return digitsBox && p.x >= digitsBox.x - pad &&
+        p.x <= digitsBox.x + digitsBox.w + pad &&
+        p.y >= digitsBox.y - pad && p.y <= digitsBox.y + digitsBox.h + pad;
+  }
+
+  function wireDigitsDrag() {
+    var canvas = $("timer-canvas");
+    canvas.addEventListener("pointerdown", function (e) {
+      if (!canDragDigits()) return;
+      var p = canvasPoint(e);
+      if (!overDigits(p)) return;
+      // Keep the grab point under the pointer instead of snapping the
+      // numbers' centre to it.
+      digitsDrag = { dx: p.x - (digitsBox.x + digitsBox.w / 2),
+                     dy: p.y - (digitsBox.y + digitsBox.h / 2) };
+      canvas.setPointerCapture(e.pointerId);
+      canvas.style.cursor = "grabbing";
+      e.preventDefault();
+    });
+    canvas.addEventListener("pointermove", function (e) {
+      var p = canvasPoint(e);
+      if (!digitsDrag) {
+        canvas.style.cursor = canDragDigits() && overDigits(p) ? "grab" : "";
+        return;
+      }
+      var x = Math.min(1, Math.max(0, (p.x - digitsDrag.dx) / PW));
+      var y = Math.min(1, Math.max(0, (p.y - digitsDrag.dy) / PH));
+      $("timer-digits-x").value = x.toFixed(4);
+      $("timer-digits-y").value = y.toFixed(4);
+      updateTimer();
+    });
+    function endDrag() {
+      if (!digitsDrag) return;
+      digitsDrag = null;
+      canvas.style.cursor = "grab";
+    }
+    canvas.addEventListener("pointerup", endDrag);
+    canvas.addEventListener("pointercancel", endDrag);
+    $("timer-digits-centre").addEventListener("click", function () {
+      $("timer-digits-x").value = "0.5";
+      $("timer-digits-y").value = "0.5";
+      $("timer-digits-size").value = "100";
+      updateTimer();
+    });
   }
 
   // Rough estimate: the worker feeds a number of INPUT frames and chews
@@ -2248,6 +2361,18 @@
       });
     }
     $("timer-beat-group").hidden = isClock;
+    // Placed digits: a classic countdown only (ring/bar are drawn around
+    // fixed centres; the clock has its own layout).
+    var styleNowEl = document.querySelector('input[name="timer-style"]:checked');
+    // (The beat opener forces CLASSIC just below, so it counts as classic.)
+    $("timer-place").hidden = isClock ||
+        !(beat || (styleNowEl && styleNowEl.value === "classic"));
+    $("timer-place-off").hidden = isClock || !$("timer-place").hidden;
+    // The canvas says it can be dragged on hover, beside the hint.
+    $("timer-canvas").title = $("timer-place").hidden ? ""
+        : "Drag the numbers to move them";
+    $("timer-digits-size-value").textContent =
+        toInt($("timer-digits-size").value, 100) + "%";
     $("timer-beat-fields").hidden = !beat;
     $("timer-beat-mine").hidden = !(beat && beatSoundChoice() === "mine");
     // Said next to each control the opener switches off, not only beside
@@ -2554,7 +2679,13 @@
         // Green screen (spec: docs/specs/green-screen.md).
         green_screen: t.greenScreen,
         // Transparent (spec: docs/specs/alpha-export.md).
-        transparent: t.transparent
+        transparent: t.transparent,
+        // Placed digits (spec: docs/specs/timer-position.md). Ring and bar
+        // ignore them, so they are sent whatever the style.
+        digits_x: t.digitsX,
+        digits_y: t.digitsY,
+        digits_size: t.digitsSize,
+        digits_color: t.digitsColor
       }
     };
   }
@@ -2631,6 +2762,7 @@
   });
   $("timer-beat-sound-remove").addEventListener("click", removeBeatSound);
   wireWave();
+  wireDigitsDrag();
   clearBeatSound();         // a fresh page never carries an old sound
   // Draw the strip once at boot. It is otherwise only drawn when an image
   // is added or removed, so on a fresh load the empty state had no "Drop

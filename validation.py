@@ -217,7 +217,32 @@ def _validate_countdown_options(options):
     }
     clean.update(_timer_background_options(options))
     clean.update(_beat_opener_options(options, clean, total))
+    clean.update(_digits_placement(options))
     return clean
+
+
+def _digits_placement(options):
+    """Where the classic digits sit and how big (docs/specs/timer-
+    position.md). Accepted for every style -- ring and bar simply ignore
+    it -- so switching style never turns a placed timer into an error."""
+    placed = {}
+    for key in ("digits_x", "digits_y"):
+        value = options.get(key, 0.5)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not 0 <= value <= 1:
+            raise ValidationError("Position must be a number from 0 to 1.")
+        placed[key] = float(value)
+    placed["digits_size"] = _int_field(options, "digits_size", 20, 100, 100,
+                                       "Size")
+    # The numbers' colour: "" (the WHITE swatch) keeps them white with the
+    # accent as the warning, exactly as before; a colour paints them.
+    color = options.get("digits_color", "")
+    if color and (not isinstance(color, str)
+                  or not HEX_COLOR_RE.fullmatch(color)):
+        raise ValidationError(
+            'Number colour must be a 6-digit hex color like "#e8b44f".')
+    placed["digits_color"] = color or ""
+    return placed
 
 
 def _beat_opener_options(options, clean, total):
@@ -524,7 +549,9 @@ def _timer_background_options(options):
         raise ValidationError(
             "Choose either green screen or a transparent background, "
             "not both.")
-    bg_dim = _int_field(options, "bg_dim", 0, 80, 45, "Dim")
+    # Default 0 (was 45): backgrounds are finished artwork, and the owner
+    # found an automatic dim greying out a white speech bubble.
+    bg_dim = _int_field(options, "bg_dim", 0, 80, 0, "Dim")
     bg_blur = options.get("bg_blur", False)
     if not isinstance(bg_blur, bool):
         raise ValidationError("Blur must be true or false.")
