@@ -175,6 +175,34 @@ if needed), `scripts/smoke.py`. UI agent — `static/index.html`,
 Do not: re-pitch or time-stretch; send the selection or anything about
 the file to analytics; let a hidden selection block an export.
 
+**Zoom and hit alignment (addendum, 2026-10-23, after v1.44.0).** The
+owner: a long sound makes "it very very hard to select a small portion
+because there's no zoom", and with a kick drum "there's a couple of frames
+before the screen going black … and my actual sound" — the selection's
+left edge sat in the quiet before the hit, so the hit played late.
+
+- **Hit alignment (server).** Inside the selected part, the *hit* is found:
+  envelope = loudest sample per 1 ms block (mono); if the first 5 ms already
+  reach 10 % of the part's peak, the part starts mid-sound (a pad) and
+  nothing moves (`hit = 0`); otherwise the hit is the first sample that
+  reaches 20 % of the peak, less a 1 ms pre-roll. Playback starts at
+  `start + hit` and runs to `start + length` — so the hit lands on the cut.
+  If that would leave under 0.05 s, `hit = 0`. Stored in `sound.json` with
+  the selection; the note is detected from the hit onwards.
+- `status`, upload and `PUT` responses gain `hit` (seconds from the
+  selection's start, 3 decimals; 0 when nothing moves).
+- **Zoom (UI).** A ZOOM slider (1×–32×, default 1×) and the mouse wheel /
+  trackpad pinch over the waveform zoom around the pointer; horizontal
+  trackpad scroll or shift+wheel pans. An overview strip above the
+  waveform shows the whole sound with a box for the visible span: drag the
+  box to move around, click the strip to jump. Zooming in keeps the
+  selection in view. Dragging the window past the visible edge pans the
+  view along. The selection's two-beat cap and all existing labels are
+  unchanged.
+- **Hit marker (UI).** A thin line inside the window where the hit is, and
+  the status reads "… — the hit at 0.15 s into your part plays on the
+  cut." when `hit > 0`. ▶ PLAY plays from the hit, as the export does.
+
 **One sound per visit (owner, after testing the trimmer: "always clear
 the uploaded sound when you click on the countdown or when you first open
 the page or when you reload … sometimes it holds the sound from the

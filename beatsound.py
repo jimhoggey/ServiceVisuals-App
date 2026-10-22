@@ -203,9 +203,65 @@ def _duration(path):
         return w.getnframes() / float(w.getframerate())
 
 
-def _write_meta(start, length, note):
+_HIT_PREROLL = 0.001       # play from 1 ms before the hit: no clipped attack
+_HIT_BLOCK = 0.001         # envelope resolution
+_HIT_QUIET = 0.10          # the part already sounding: don't move anything
+_HIT_LEVEL = 0.20          # where the hit is
+
+
+def find_hit(clip, sample_rate=SAMPLE_RATE):
+    """Seconds from the start of `clip` (interleaved stereo) to its hit,
+    less a 1 ms pre-roll; 0 when nothing should move.
+
+    The owner's kick drum played a few frames after the cut: their window
+    began in the quiet before the kick, and playback starts at the
+    window's edge. A selection can't be dragged to the exact sample, so
+    the app finds the hit itself -- where the part goes from quiet to
+    loud -- and plays from there. A part that is already sounding in its
+    first 5 ms (a pad picked up mid-note) has no hit to find, and moving
+    it would only chop the note."""
+    frames = len(clip) // 2
+    if frames == 0:
+        return 0.0
+    block = max(1, int(_HIT_BLOCK * sample_rate))
+    env = []
+    for b in range(0, frames, block):
+        hi = 0
+        for j in range(b, min(frames, b + block)):
+            v = abs(clip[2 * j]) + abs(clip[2 * j + 1])
+            if v > hi:
+                hi = v
+        env.append(hi)
+    peak = max(env)
+    if peak == 0 or max(env[:5]) >= _HIT_QUIET * peak:
+        return 0.0
+    first = next(i for i, v in enumerate(env) if v >= _HIT_LEVEL * peak)
+    # The exact sample inside that block, so the hit isn't up to 1 ms late.
+    level = _HIT_LEVEL * peak
+    at = first * block
+    for j in range(first * block, min(frames, (first + 1) * block)):
+        if abs(clip[2 * j]) + abs(clip[2 * j + 1]) >= level:
+            at = j
+            break
+    hit = max(0, at - int(_HIT_PREROLL * sample_rate)) / float(sample_rate)
+    return round(hit, 3)
+
+
+def _write_meta(start, length, note, hit=0.0):
     with open(META_PATH, "w") as f:
-        json.dump({"start": start, "length": length, "note": note}, f)
+        json.dump({"start": start, "length": length, "note": note,
+                   "hit": hit}, f)
+
+
+def _describe(pcm, start, length):
+    """(note, hit) for the selected part: the hit found, then the note
+    detected from the hit onwards. A hit that would leave under
+    MIN_LENGTH to play is ignored."""
+    part = _region(pcm, start, length)
+    hit = find_hit(part)
+    if length - hit < MIN_LENGTH:
+        hit = 0.0
+    return detect_note(_region(pcm, start + hit, length - hit)), hit
 
 
 def save_upload(stream):
@@ -232,7 +288,8 @@ def save_upload(stream):
     length = round(max(MIN_LENGTH, min(MAX_LENGTH, duration - start)), 3)
     _write_wav(ORIGINAL_PATH, pcm)
     unlink_quietly(SOUND_PATH)        # a v1.42.0 clip no longer applies
-    _write_meta(start, length, detect_note(_region(pcm, start, length)))
+    note, hit = _describe(pcm, start, length)
+    _write_meta(start, length, note, hit)
     result = status()
     result["trimmed"] = duration >= MAX_INPUT_SECONDS - 0.01
     return result
@@ -254,8 +311,8 @@ def set_selection(start, length):
     if start < 0 or start + length > duration + 0.002:
         raise SoundError(ERR_OUTSIDE)
     start, length = round(start, 3), round(length, 3)
-    pcm = _read_wav(path)
-    _write_meta(start, length, detect_note(_region(pcm, start, length)))
+    note, hit = _describe(_read_wav(path), start, length)
+    _write_meta(start, length, note, hit)
     return status()
 
 
@@ -278,8 +335,11 @@ def status():
         # A v1.42.0 sound: its clip is already trimmed to the attack.
         start, length = 0.0, round(min(MAX_LENGTH, duration), 3)
     note = meta.get("note") if meta.get("note") in NOTE_NAMES else None
+    hit = meta.get("hit")
+    if not isinstance(hit, (int, float)) or not 0 <= hit < length:
+        hit = 0.0          # metadata from before hit alignment
     return {"present": True, "note": note, "seconds": length,
-            "start": start, "duration": duration}
+            "start": start, "duration": duration, "hit": hit}
 
 
 def remove():
@@ -289,16 +349,22 @@ def remove():
 
 
 def load():
-    """The selected part as interleaved stereo samples (array 'h'), with
-    a 3 ms fade-in and a 30 ms fade-out, or None. The render caps it at
-    the next cut as well."""
+    """The selected part from its hit on, as interleaved stereo samples
+    (array 'h'), with a short fade-in and a 30 ms fade-out, or None. The
+    render places sample 0 on the cut, so the hit lands on it; it caps
+    the part at the next cut as well."""
     path = audio_path()
     if path is None:
         return None
     info = status()
-    clip = _region(_read_wav(path), info["start"], info["seconds"])
+    hit = info["hit"]
+    clip = _region(_read_wav(path), info["start"] + hit,
+                   info["seconds"] - hit)
     frames = len(clip) // 2
-    fade_in = int(_FADE_IN * SAMPLE_RATE)
+    # From a found hit, the fade covers only the 1 ms of quiet before it:
+    # a 3 ms fade there would blunt a kick's attack, the very thing being
+    # lined up. Mid-sound starts keep 3 ms so they don't click.
+    fade_in = int((_HIT_PREROLL if hit > 0 else _FADE_IN) * SAMPLE_RATE)
     fade_out = int(_FADE_OUT * SAMPLE_RATE)
     out = array.array("h", clip)
     for j in range(frames):

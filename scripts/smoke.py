@@ -3130,7 +3130,8 @@ def check_beat_sound():
     got = client.get("/api/beat-sound").get_json()
     check("GET reports the stored sound and its selection",
           got == {"present": True, "note": "A", "seconds": 2.0,
-                  "start": body["start"], "duration": body["duration"]},
+                  "start": body["start"], "duration": body["duration"],
+                  "hit": body["hit"]},
           repr(got))
     audio = client.get("/api/beat-sound/audio")
     check("the whole sound is served for the waveform and preview",
@@ -3180,6 +3181,69 @@ def check_beat_sound():
           len(clip) == int(round(0.8 * 44100)) * 2
           and clip[0] == 0 and abs(clip[-1]) < 600,
           "{0} samples, ends {1} / {2}".format(len(clip), clip[0], clip[-1]))
+
+    # Hit alignment: the owner's kick drum played a few frames after the
+    # cut, because the window began in the quiet before it. A sound of
+    # low noise with a kick 0.4 s in; select from 0.25 s (150 ms early).
+    def kick_wav():
+        rng = random.Random(3)
+        frames = array.array("h")
+        for k in range(int(1.5 * 44100)):
+            t = k / 44100.0
+            v = 80 * rng.uniform(-1, 1)            # room noise
+            if t >= 0.4:
+                d = t - 0.4
+                v += 20000 * math.exp(-d / 0.08) * math.sin(
+                    2 * math.pi * (60 + 120 * math.exp(-d / 0.02)) * d)
+            frames.append(int(v))
+        if sys.byteorder != "little":
+            frames.byteswap()
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(44100)
+            w.writeframes(frames.tobytes())
+        buf.seek(0)
+        return buf
+
+    client.post("/api/beat-sound", content_type="multipart/form-data",
+                data={"sound": (kick_wav(), "kick.wav")})
+    picked = client.put("/api/beat-sound",
+                        json={"start": 0.25, "length": 0.6}).get_json()
+    check("the hit is found 150 ms into a window that starts early",
+          abs(picked["hit"] - 0.149) <= 0.002, repr(picked))
+    pad_part = beatsound.find_hit(beatsound._region(
+        beatsound.normalise(array.array("h", [
+            int(6000 * math.sin(2 * math.pi * 220 * k / 44100))
+            for k in range(44100) for _ in (0, 1)])), 0.3, 0.5))
+    check("a part that starts mid-sound (a pad) is not moved",
+          pad_part == 0.0, repr(pad_part))
+    filename = render_timer(validate_timer_options({
+        "minutes": 0, "seconds": 5, "beat_opener": True, "bpm": 125,
+        "key": "A", "beat_sound": "mine", "hold_seconds": 1}),
+        lambda pct: None)
+    path = os.path.join(EXPORTS_DIR, filename)
+    try:
+        proc = subprocess.run(
+            [FFMPEG, "-v", "error", "-i", path, "-ac", "1", "-ar", "44100",
+             "-f", "s16le", "-"], stdout=subprocess.PIPE)
+        pcm = array.array("h")
+        pcm.frombytes(proc.stdout[:len(proc.stdout) // 2 * 2])
+        if sys.byteorder != "little":
+            pcm.byteswap()
+        peak = max(abs(v) for v in pcm)
+        late = []
+        for t in [c for c in beat.ping_times(5, 125) if c > 0.05]:
+            first = int(t * 44100)
+            onset = next(k for k in range(first, first + 22050)
+                         if abs(pcm[k]) >= 0.2 * peak)
+            late.append(round((onset - first) / 44.1, 1))
+        check("the kick lands on every cut (within 4 ms)",
+              all(-1 <= ms <= 4 for ms in late), repr(late))
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
 
     # Put the long A pad back for the render below.
     client.post("/api/beat-sound", content_type="multipart/form-data",
@@ -3281,7 +3345,7 @@ def check_beat_sound():
     got = beatsound.status()
     check("a v1.42.0 sound still loads, selection 0 to its end",
           got == {"present": True, "note": "A", "seconds": 1.2,
-                  "start": 0.0, "duration": 1.2}
+                  "start": 0.0, "duration": 1.2, "hit": 0.0}
           and len(beatsound.load()) == int(1.2 * 44100) * 2, repr(got))
     beatsound.remove()
     check("removing clears a v1.42.0 sound too",

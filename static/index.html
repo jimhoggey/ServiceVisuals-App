@@ -609,10 +609,22 @@
                        canvas and shows this block only while a sound is
                        stored. -->
                   <div class="beat-wave-block" id="timer-beat-wave-block" hidden>
+                    <!-- Overview of the whole sound while zoomed in: drag
+                         the box to move around, click to jump. -->
+                    <canvas id="timer-beat-wave-map" class="beat-wave-map" height="18" role="img" aria-label="Overview of your whole sound. Drag the box to move around the zoomed waveform." hidden></canvas>
                     <div class="beat-wave-wrap">
-                      <canvas id="timer-beat-wave" class="beat-wave" height="84" role="img" aria-label="Waveform of your sound. Drag the highlighted part to move it, or drag its edges to change how much plays."></canvas>
+                      <canvas id="timer-beat-wave" class="beat-wave" height="84" role="img" aria-label="Waveform of your sound. Drag the highlighted part to move it, or drag its edges to change how much plays. Scroll to zoom."></canvas>
                       <div class="beat-wave-loading" id="timer-beat-wave-loading" hidden>Loading your sound&#8230;</div>
                     </div>
+                    <div class="beat-zoom-row">
+                      <label class="beat-zoom-label" for="timer-beat-zoom">ZOOM</label>
+                      <input type="range" id="timer-beat-zoom" min="0" max="100" step="1" value="0" title="Zoom in to place the cut precisely. You can also scroll over the waveform.">
+                      <span class="range-value" id="timer-beat-zoom-value">1&#215;</span>
+                      <!-- One click back out (UX check: the only way was
+                           dragging the slider all the way left). -->
+                      <button type="button" class="link-btn" id="timer-beat-zoom-reset" hidden>1&#215;</button>
+                    </div>
+                    <p class="hint" id="timer-beat-zoom-hint">Scroll over the waveform to zoom in on part of your sound.</p>
                     <div class="beat-wave-row">
                       <button type="button" class="btn beat-play" id="timer-beat-play">&#9654; PLAY</button>
                       <div class="beat-wave-text">

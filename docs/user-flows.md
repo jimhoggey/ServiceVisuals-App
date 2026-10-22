@@ -399,6 +399,16 @@ beats so what is selected is exactly what plays. ▶ PLAY previews it.
   BUILT-IN TONE (so the "preselect MY SOUND" fix above was dropped). An
   export already pressed keeps its sound.
 
+- The owner, after v1.44.0, with a kick drum: "a couple of frames
+  before the screen going black … and my actual sound". The window's left
+  edge sat in the quiet before the kick, and playback starts at the edge —
+  measured 150 ms late on every cut. The app now finds the hit inside the
+  part and plays from it: measured 1.2 ms after each cut (a 1 ms pre-roll).
+  A part already sounding at its start (a pad) is never moved.
+- The owner: a long sound was "very very hard to select a small portion
+  because there's no zoom" — ZOOM slider, wheel/pinch zoom around the
+  pointer, and an overview strip to move around.
+
 Rule confirmed: when a control clamps what the operator drags or types,
 the screen says what the limit is and why, next to the control, before
 they hit it. A silent clamp reads as a broken control.

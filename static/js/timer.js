@@ -68,8 +68,12 @@
   // name for the selection length), `duration` is the whole original.
   // `audioGen` counts uploads so a replacement of the same length still
   // re-fetches the waveform.
+  // `hit` (zoom + hit addendum) is where the sound's first hit lands inside
+  // the selected part, in seconds from `start`; the server works it out and
+  // the export plays from start + hit. 0 = nothing shifts (also what a
+  // server that doesn't send it means).
   var beatSound = { present: false, note: null, seconds: 0, trimmed: false,
-                    start: 0, duration: 0, audioGen: 0,
+                    start: 0, duration: 0, hit: 0, audioGen: 0,
                     busy: false, error: "" };
   var BEAT_SOUND_UPLOAD_FAILED = "Couldn't upload that sound — try again.";
   var BEAT_SOUND_SAVE_FAILED = "Couldn't save that part of your sound — " +
@@ -110,6 +114,7 @@
     beatSound.seconds = beatSound.present ? (j.seconds || 0) : 0;
     beatSound.start = beatSound.present ? (j.start || 0) : 0;
     beatSound.duration = beatSound.present ? (j.duration || 0) : 0;
+    beatSound.hit = beatSound.present && j.hit > 0 ? +j.hit : 0;
     if (!beatSound.present) beatSound.trimmed = false;
   }
 
@@ -208,7 +213,15 @@
       text = "Your sound plays on every beat: " +
           floor2(beatSound.seconds).toFixed(2) + " s" +
           (beatSound.note ? ", in " + noteLabel(beatSound.note) +
-              " (detected from the part you've selected)" : "") + ".";
+              " (detected from the part you've selected)" : "");
+      // The quiet before a hit is skipped on the cut, so the hit lands
+      // on the flash. Said, because the part is longer than what plays.
+      // Not below half a hundredth: it would read "0.00 s".
+      if (beatSound.hit >= 0.005) {
+        text += " — the hit at " + beatSound.hit.toFixed(2) +
+            " s into your part plays on the cut";
+      }
+      text += ".";
       if (beatSound.trimmed) text += " Only the first 30 seconds were kept.";
     } else {
       // Empty: the instruction line below already says what to do, and
@@ -271,7 +284,14 @@
   // selected is exactly what the export plays on every cut. The server
   // keeps the truth (PUT /api/beat-sound on release); the browser decodes
   // GET /api/beat-sound/audio for both the picture and the preview.
-  var WAVE_PEAK_COLS = 2400;   // peaks are computed once, then resampled
+  // Zoomed-in detail has to be real, so peaks are worked out from the
+  // decoded samples for exactly the visible span. A coarse min/max pyramid
+  // (one entry per WAVE_MIP samples) makes the zoomed-out views cheap; once
+  // a pixel covers fewer than two entries the raw samples are read.
+  var WAVE_MIP = 64;
+  var ZOOM_MAX = 32;
+  var WAVE_HIT = "#6fd0c4";          // the hit marker: not amber, not ink
+  var WAVE_BAND = 8;           // CSS px at the canvas edge that pan a drag
   // Grab zone around a window edge, CSS px. Wide on purpose: the edge bars
   // are thin, and a volunteer aiming at one with a mouse missed at 8.
   var WAVE_EDGE_PX = 12;
@@ -291,14 +311,20 @@
   // key: which sound is loaded (duration|upload count); failedKey stops a
   // sound the browser can't decode from being re-fetched on every redraw.
   var wave = { key: "", failedKey: "", token: 0, ctx: null, buffer: null,
-               mins: null, maxs: null, peak: 1, ver: 0, drawn: "",
+               chans: null, mip: null, peak: 1, ver: 0, drawn: "",
                drag: null, source: null, playing: false, saveToken: 0,
                saveTimer: null, saving: false,
+               // the visible span: zoom (1 = whole sound) and where it
+               // starts, in seconds; pk/pkO cache the peaks drawn for the
+               // waveform and the overview strip; panRaf is the edge
+               // auto-pan loop, ovDrag a drag of the overview box
+               zoom: 1, vs: 0, pk: null, pkO: null, panRaf: 0, ovDrag: null,
+               gest: null,
                // set when a BPM change cut the window: {len, bpm}
                shortened: null,
                // playhead: raf handle, when the audio clock started, how
                // long it plays, and the sound-time it is at (null = idle)
-               raf: 0, t0: 0, len: 0, head: null };
+               raf: 0, t0: 0, len: 0, off: 0, head: null };
 
   function r3(v) { return Math.round(v * 1000) / 1000; }
   function floor3(v) { return Math.floor(v * 1000 + 1e-6) / 1000; }
@@ -343,36 +369,192 @@
     });
   }
 
+  // Plain arrays (scripts/jscheck.py doesn't know typed-array constructors).
+  function zeros(n) {
+    var a = Array(n), i;
+    for (i = 0; i < n; i++) a[i] = 0;
+    return a;
+  }
+
+  // Keeps the decoded channels (zooming needs the real samples) and builds
+  // the coarse min/max pyramid over them. `peak` is the loudest sample of
+  // the whole sound: the picture's height stays fixed while you zoom, so a
+  // quiet stretch doesn't blow up into a loud-looking one.
   function computePeaks(buf) {
-    var cols = WAVE_PEAK_COLS, n = buf.length;
-    var mins = [], maxs = [];
-    var chans = [], c, i, j;
+    var n = buf.length, blocks = Math.max(1, Math.ceil(n / WAVE_MIP));
+    var mins = zeros(blocks), maxs = zeros(blocks);
+    var chans = [], c, i, k;
     for (c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
-    var per = n / cols, peak = 0;
-    for (i = 0; i < cols; i++) {
-      var a = Math.floor(i * per);
-      var b = Math.max(a + 1, Math.floor((i + 1) * per));
+    var peak = 0;
+    for (k = 0; k < blocks; k++) {
+      var a = k * WAVE_MIP, b = Math.min(n, a + WAVE_MIP);
       var mn = 0, mx = 0;
       for (c = 0; c < chans.length; c++) {
         var d = chans[c];
-        for (j = a; j < b && j < n; j++) {
-          var v = d[j];
+        for (i = a; i < b; i++) {
+          var v = d[i];
           if (v < mn) mn = v;
           if (v > mx) mx = v;
         }
       }
-      mins[i] = mn; maxs[i] = mx;
-      peak = Math.max(peak, -mn, mx);
+      mins[k] = mn; maxs[k] = mx;
+      if (-mn > peak) peak = -mn;
+      if (mx > peak) peak = mx;
     }
-    wave.mins = mins; wave.maxs = maxs;
+    wave.chans = chans;
+    wave.mip = { mins: mins, maxs: maxs };
     wave.peak = peak > 0 ? peak : 1;
+  }
+
+  // Min/max for each of `cols` pixel columns across t0..t1 (seconds).
+  // Columns outside the sound are flat.
+  function peaksFor(t0, t1, cols) {
+    var mins = zeros(cols), maxs = zeros(cols);
+    var buf = wave.buffer;
+    if (!buf || !wave.mip || !(cols > 0)) return { mins: mins, maxs: maxs };
+    var n = buf.length, sr = buf.sampleRate;
+    var s0 = t0 * sr, per = (t1 - t0) * sr / cols;
+    var useMip = per >= WAVE_MIP * 2;
+    var i, j, c;
+    for (i = 0; i < cols; i++) {
+      var a = Math.max(0, Math.floor(s0 + i * per));
+      var b = Math.min(n, Math.max(a + 1, Math.floor(s0 + (i + 1) * per)));
+      if (a >= n || b <= 0) continue;
+      var mn = 0, mx = 0;
+      if (useMip) {
+        var ma = Math.floor(a / WAVE_MIP);
+        var mb = Math.max(ma + 1, Math.ceil(b / WAVE_MIP));
+        for (j = ma; j < mb && j < wave.mip.mins.length; j++) {
+          if (wave.mip.mins[j] < mn) mn = wave.mip.mins[j];
+          if (wave.mip.maxs[j] > mx) mx = wave.mip.maxs[j];
+        }
+      } else {
+        for (c = 0; c < wave.chans.length; c++) {
+          var d = wave.chans[c];
+          for (j = a; j < b; j++) {
+            var v = d[j];
+            if (v < mn) mn = v;
+            if (v > mx) mx = v;
+          }
+        }
+      }
+      mins[i] = mn; maxs[i] = mx;
+    }
+    return { mins: mins, maxs: maxs };
+  }
+
+  // ---- the visible span (zoom) ---------------------------------------
+  // zoom 1 shows the whole sound; at 32 the canvas shows 1/32 of it,
+  // starting `vs` seconds in.
+  function viewSpan() {
+    var d = waveDuration();
+    return d > 0 ? d / wave.zoom : 0;
+  }
+
+  function clampView() {
+    var d = waveDuration();
+    wave.vs = d > 0 ? Math.max(0, Math.min(wave.vs, d - viewSpan())) : 0;
+  }
+
+  function tToX(t, width) {
+    var s = viewSpan();
+    return s > 0 ? (t - wave.vs) / s * width : 0;
+  }
+
+  function xToT(x, width) {
+    return wave.vs + (width > 0 ? x / width : 0) * viewSpan();
+  }
+
+  // Part of the selected window is on screen.
+  function selInView() {
+    var s = beatSound.start, e = s + beatSound.seconds;
+    return e > wave.vs && s < wave.vs + viewSpan();
+  }
+
+  // After a zoom-in: if the selection fits in the view, make sure all of it
+  // is in it (zooming around the pointer can push it off one side). A
+  // selection longer than the view is left to the anchor: the volunteer
+  // pointed at something, and shoving an edge half off screen would fight
+  // them.
+  function keepSelInView() {
+    var s = beatSound.start, e = s + beatSound.seconds, span = viewSpan();
+    if (e - s > span) return;
+    if (s < wave.vs) wave.vs = s;
+    else if (e > wave.vs + span) wave.vs = e - span;
+  }
+
+  // The slider is logarithmic: every step is the same ratio, so the first
+  // half of the travel isn't spent between 1x and 2x.
+  function zoomToSlider(z) {
+    return Math.round(100 * Math.log(z) / Math.log(ZOOM_MAX));
+  }
+
+  function sliderToZoom(v) {
+    return Math.pow(ZOOM_MAX, Math.max(0, Math.min(100, v)) / 100);
+  }
+
+  function zoomText(z) {
+    if (z >= 9.95) return Math.round(z) + "×";
+    return (Math.round(z * 10) / 10) + "×";
+  }
+
+  // Slider, its number and the overview strip follow wave.zoom. The strip
+  // is only worth its room once there is something to move around.
+  function syncZoomUi() {
+    var sl = $("timer-beat-zoom");
+    var v = zoomToSlider(wave.zoom);
+    if (+sl.value !== v) sl.value = v;
+    $("timer-beat-zoom-value").textContent = zoomText(wave.zoom);
+    $("timer-beat-wave-map").hidden = wave.zoom <= 1.0001;
+    $("timer-beat-zoom-reset").hidden = wave.zoom <= 1.0001;
+  }
+
+  // Zoom to `z`, keeping the sound-time `t` under the fraction `frac` of
+  // the canvas width. Zooming in keeps a selection that fits in view.
+  function setZoom(z, t, frac) {
+    if (!(waveDuration() > 0)) return;
+    z = Math.max(1, Math.min(ZOOM_MAX, z));
+    var wasIn = selInView(), zoomingIn = z > wave.zoom;
+    wave.zoom = z;
+    wave.vs = t - frac * viewSpan();
+    if (zoomingIn && wasIn) keepSelInView();
+    clampView();
+    syncZoomUi();
+    drawWave();
+  }
+
+  // The slider has no pointer to zoom around: centre on the selection when
+  // it is on screen (and fits), else on what is in the middle of the view.
+  function zoomFromSlider() {
+    var z = sliderToZoom(+$("timer-beat-zoom").value);
+    var dur = waveDuration();
+    if (!(dur > 0)) return;
+    var span = dur / z, len = beatSound.seconds;
+    if (selInView()) {
+      if (len <= span * 0.9) {
+        setZoom(z, beatSound.start + len / 2, 0.5);
+      } else {
+        setZoom(z, beatSound.start, 0.1);
+      }
+    } else {
+      setZoom(z, wave.vs + viewSpan() / 2, 0.5);
+    }
+  }
+
+  function resetView() {
+    wave.zoom = 1;
+    wave.vs = 0;
+    wave.pk = null; wave.pkO = null;
+    syncZoomUi();
   }
 
   function clearWave() {
     wave.token += 1;
     wave.key = "";
-    wave.buffer = null; wave.mins = null; wave.maxs = null;
+    wave.buffer = null; wave.chans = null; wave.mip = null;
     wave.ver += 1;
+    // A new or removed sound starts whole, not at the old sound's zoom.
+    resetView();
     // A new or removed sound: "shortened to fit" was about the old one.
     wave.shortened = null;
     stopPlayback();
@@ -422,13 +604,15 @@
     wave.raf = 0;
     if (!wave.playing || !wave.ctx) return;
     var el = Math.max(0, Math.min(wave.len, wave.ctx.currentTime - wave.t0));
-    wave.head = beatSound.start + el;
+    wave.head = wave.off + el;
     drawWave();
     wave.raf = requestAnimationFrame(tickPlayhead);
   }
 
-  // Exactly the selected part, with the export's fades: 3 ms in so a window
-  // that starts mid-sound doesn't click, 30 ms out at its end.
+  // Exactly what the export plays: from the hit (the quiet before it is
+  // skipped, so the hit lands on the cut) to the end of the selected part,
+  // with the export's fades: 3 ms in so a part that starts mid-sound doesn't
+  // click, 30 ms out at its end.
   function startPlayback() {
     var ctx = getAudioCtx();
     if (!ctx || !wave.buffer) return;
@@ -437,7 +621,13 @@
       // A browser may hold a new context suspended until a click; this is
       // inside one.
       if (ctx.state === "suspended" && ctx.resume) ctx.resume();
-      var len = Math.min(beatSound.seconds, waveMaxLen());
+      var whole = Math.min(beatSound.seconds, waveMaxLen());
+      // A hit that would leave nothing to play (a stale value) is ignored,
+      // as the server does under 0.05 s.
+      var hit = beatSound.hit > 0 && whole - beatSound.hit >= SEL_MIN
+          ? beatSound.hit : 0;
+      var len = whole - hit;
+      var off = beatSound.start + hit;
       var t0 = ctx.currentTime + 0.01;
       var src = ctx.createBufferSource();
       src.buffer = wave.buffer;
@@ -455,9 +645,10 @@
           stopPlayback();       // clears the playhead and the button
         }
       };
-      src.start(t0, beatSound.start, len);
+      src.start(t0, off, len);
       wave.source = src;
       wave.playing = true;
+      wave.off = off;
       wave.t0 = t0;
       wave.len = len;
       wave.raf = requestAnimationFrame(tickPlayhead);
@@ -532,19 +723,91 @@
   // Edge x positions in the units of `width` (CSS px or device px). A
   // window narrower than minW is drawn minW wide around its middle, so the
   // grab target and the drawing always agree.
+  // Positions follow the zoomed view, so an edge can be off the canvas.
+  // The widening is kept inside the SOUND (its ends are 0 and `width` only
+  // when whole), not inside the canvas.
   function waveEdges(width, minW) {
     var dur = waveDuration();
     if (!(dur > 0)) return null;
-    var sx = beatSound.start / dur * width;
-    var ex = (beatSound.start + beatSound.seconds) / dur * width;
+    var sx = tToX(beatSound.start, width);
+    var ex = tToX(beatSound.start + beatSound.seconds, width);
     if (ex - sx < minW) {
       var c = (sx + ex) / 2;
+      var lo = tToX(0, width), hi = tToX(dur, width);
       sx = c - minW / 2;
       ex = c + minW / 2;
-      if (sx < 0) { ex -= sx; sx = 0; }
-      if (ex > width) { sx -= ex - width; ex = width; }
+      if (sx < lo) { ex += lo - sx; sx = lo; }
+      if (ex > hi) { sx -= ex - hi; ex = hi; }
     }
     return { sx: sx, ex: ex };
+  }
+
+  // One strip of columns (min/max) as a filled waveform, `col(x)` picking
+  // each column's colour.
+  function paintPeaks(g, p, w, mid, amp, col) {
+    var last = "", x;
+    for (x = 0; x < w; x++) {
+      var c = col(x);
+      if (c !== last) { g.fillStyle = c; last = c; }
+      var y0 = mid - p.maxs[x] * amp;
+      g.fillRect(x, y0, 1, Math.max(1, mid - p.mins[x] * amp - y0));
+    }
+  }
+
+  // The box for the visible span on the overview strip, in the units of
+  // `width`; at least minW wide so it can be grabbed at 32x. The drawing
+  // and the pointer test both use this, so they agree.
+  function overviewBox(width, minW) {
+    var dur = waveDuration();
+    if (!(dur > 0)) return { x: 0, w: width };
+    var bw = Math.max(minW, viewSpan() / dur * width);
+    return { x: Math.max(0, Math.min(width - bw, wave.vs / dur * width)),
+             w: bw };
+  }
+
+  // The overview strip: the whole sound small, the selection in amber and a
+  // box for what the big waveform shows. Only drawn while zoomed in.
+  function drawOverview() {
+    var ov = $("timer-beat-wave-map");
+    if (ov.hidden) return;
+    var cssW = ov.clientWidth, cssH = ov.clientHeight;
+    if (!cssW || !cssH) return;
+    var dpr = window.devicePixelRatio || 1;
+    var w = Math.round(cssW * dpr), h = Math.round(cssH * dpr);
+    if (ov.width !== w) ov.width = w;
+    if (ov.height !== h) ov.height = h;
+    var g = ov.getContext("2d");
+    if (!g) return;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, w, h);
+    var dur = waveDuration();
+    if (!(dur > 0)) return;
+    var mid = h / 2;
+    var key = w + "|" + wave.ver;
+    if (wave.mip && (!wave.pkO || wave.pkO.key !== key)) {
+      wave.pkO = { key: key, p: peaksFor(0, dur, w) };
+    }
+    var sx = beatSound.start / dur * w;
+    var ex = (beatSound.start + beatSound.seconds) / dur * w;
+    ex = Math.max(ex, sx + Math.max(2, Math.round(2 * dpr)));
+    if (wave.mip && wave.pkO) {
+      paintPeaks(g, wave.pkO.p, w, mid, 0.9 * mid / wave.peak, function (px) {
+        return px + 0.5 >= sx && px + 0.5 <= ex ? WAVE_ACCENT : WAVE_MUTED;
+      });
+    } else {
+      g.fillStyle = WAVE_MUTED;
+      g.fillRect(0, Math.floor(mid), w, 1);
+    }
+    var box = overviewBox(w, 6 * dpr);
+    var bx = box.x, bw = box.w;
+    var lw = Math.max(1, Math.round(1.5 * dpr));
+    g.fillStyle = "rgba(233, 231, 226, 0.14)";
+    g.fillRect(bx, 0, bw, h);
+    g.fillStyle = WAVE_HEAD;
+    g.fillRect(bx, 0, bw, lw);
+    g.fillRect(bx, h - lw, bw, lw);
+    g.fillRect(bx, 0, lw, h);
+    g.fillRect(bx + bw - lw, 0, lw, h);
   }
 
   function drawWave() {
@@ -555,7 +818,8 @@
     var dpr = window.devicePixelRatio || 1;
     var w = Math.round(cssW * dpr), h = Math.round(cssH * dpr);
     var sig = [w, h, wave.ver, beatSound.start, beatSound.seconds,
-               beatSound.duration, wave.head].join("|");
+               beatSound.duration, wave.head, wave.zoom, wave.vs,
+               beatSound.hit].join("|");
     if (sig === wave.drawn && cv.width === w && cv.height === h) return;
     var g = cv.getContext("2d");
     if (!g) return;
@@ -567,27 +831,23 @@
 
     var e = waveEdges(w, WAVE_MIN_DRAWN_PX * dpr);   // device px here
     var mid = h / 2;
-    var x;
     // Centre line, so a still-decoding or silent sound isn't an empty box.
     g.fillStyle = WAVE_MUTED;
     g.fillRect(0, Math.floor(mid), w, 1);
-    if (wave.mins) {
-      var amp = 0.9 * mid / wave.peak, cols = WAVE_PEAK_COLS;
-      var last = "";
-      for (x = 0; x < w; x++) {
-        var a = Math.floor(x / w * cols);
-        var b = Math.max(a + 1, Math.floor((x + 1) / w * cols));
-        var mn = 0, mx = 0;
-        for (var k = a; k < b && k < cols; k++) {
-          if (wave.mins[k] < mn) mn = wave.mins[k];
-          if (wave.maxs[k] > mx) mx = wave.maxs[k];
-        }
-        var inside = e && x + 0.5 >= e.sx && x + 0.5 <= e.ex;
-        var col = inside ? WAVE_ACCENT : WAVE_MUTED;
-        if (col !== last) { g.fillStyle = col; last = col; }
-        var y0 = mid - mx * amp;
-        g.fillRect(x, y0, 1, Math.max(1, mid - mn * amp - y0));
+    if (wave.mip) {
+      // Worked out from the samples under the visible span, so zooming in
+      // shows real detail. Cached: the playhead redraws this 60 times a
+      // second and the span hasn't moved.
+      var span = viewSpan();
+      var key = [w, Math.round(wave.vs * 1e5), Math.round(span * 1e5),
+                 wave.ver].join("|");
+      if (!wave.pk || wave.pk.key !== key) {
+        wave.pk = { key: key, p: peaksFor(wave.vs, wave.vs + span, w) };
       }
+      paintPeaks(g, wave.pk.p, w, mid, 0.9 * mid / wave.peak, function (px) {
+        return e && px + 0.5 >= e.sx && px + 0.5 <= e.ex
+            ? WAVE_ACCENT : WAVE_MUTED;
+      });
     }
     if (e) {
       var hw = Math.max(3, Math.round(6 * dpr));    // visible edge handle
@@ -613,13 +873,34 @@
         }
       }
     }
-    if (wave.head !== null && e) {
-      var dur = waveDuration();
-      var hx = Math.round(wave.head / dur * w);
-      var pw = Math.max(1, Math.round(1.5 * dpr));
-      g.fillStyle = WAVE_HEAD;
-      g.fillRect(Math.min(w - pw, hx), 0, pw, h);
+    // The hit: where the sound actually starts playing on the cut. A thin
+    // line with a small flag, inside the window. It is the server's answer
+    // for THIS selection, so it is zeroed while the window is being
+    // dragged (see dragWave) rather than shown in the wrong place.
+    if (e && beatSound.hit > 0) {
+      var hxm = Math.round(tToX(beatSound.start + beatSound.hit, w));
+      if (hxm >= 0 && hxm <= w) {
+        var hl = Math.max(1, Math.round(1.5 * dpr));
+        var fl = Math.round(5 * dpr);
+        g.fillStyle = WAVE_HIT;
+        g.fillRect(hxm - Math.floor(hl / 2), 0, hl, h);
+        g.beginPath();
+        g.moveTo(hxm - fl, 0);
+        g.lineTo(hxm + fl, 0);
+        g.lineTo(hxm, fl);
+        g.closePath();
+        g.fill();
+      }
     }
+    if (wave.head !== null && e) {
+      var pw = Math.max(1, Math.round(1.5 * dpr));
+      var hx = Math.round(tToX(wave.head, w));
+      if (hx >= 0 && hx <= w) {
+        g.fillStyle = WAVE_HEAD;
+        g.fillRect(Math.min(w - pw, hx), 0, pw, h);
+      }
+    }
+    drawOverview();
   }
 
   // Shows or hides the whole block and keeps it in step. Called from
@@ -643,6 +924,7 @@
     // it. Saved once, shortly after the typing stops, not per keystroke.
     if (!wave.drag && beatSound.seconds > waveMaxLen() + 0.0005) {
       beatSound.seconds = floor3(waveMaxLen());
+      beatSound.hit = 0;     // worked out for the longer part; the save redoes it
       // Tell the volunteer why it got shorter -- it happens under their
       // hands while they type in another box. It stays until they drag or
       // upload; nothing grows it back by itself.
@@ -654,6 +936,7 @@
         var cap = floor3(waveMaxLen());
         if (beatSound.present && beatSound.seconds > cap) {
           beatSound.seconds = cap;
+          beatSound.hit = 0;
           wave.shortened = { len: cap, bpm: waveBpm() };
         }
         saveBeatSelection();
@@ -722,16 +1005,22 @@
     return (x > e.sx && x < e.ex) ? "move" : "";
   }
 
-  function waveX(ev) {
+  function waveXAt(clientX) {
     var cv = $("timer-beat-wave");
-    return ev.clientX - cv.getBoundingClientRect().left - cv.clientLeft;
+    return clientX - cv.getBoundingClientRect().left - cv.clientLeft;
   }
 
-  function dragWave(ev) {
+  function waveX(ev) { return waveXAt(ev.clientX); }
+
+  // The drag is measured in sound-time (d.t0 is the time under the pointer
+  // at pointerdown), not pixels: when the view pans under a held pointer,
+  // the window has to follow it.
+  function dragWave(clientX) {
     var d = wave.drag, cv = $("timer-beat-wave");
     var dur = waveDuration(), maxLen = waveMaxLen();
     var minLen = Math.min(SEL_MIN, dur);
-    var dt = (waveX(ev) - d.x0) / cv.clientWidth * dur;
+    d.cx = clientX;
+    var dt = xToT(waveXAt(clientX), cv.clientWidth) - d.t0;
     var start, end, len;
     if (d.mode === "move") {
       len = Math.min(d.end0 - d.start0, maxLen);
@@ -750,22 +1039,179 @@
     if (start + len > dur) len = floor3(dur - start);
     beatSound.start = start;
     beatSound.seconds = len;
+    // The hit belongs to the selection the server measured; this one has
+    // not been measured yet, so say nothing rather than point at the wrong
+    // spot. The reply to the save brings it back.
+    beatSound.hit = 0;
     renderWaveText();
     // The status line's length moves with the label, not a save later.
     renderBeatSoundStatus();
     drawWave();
   }
 
+  // While a drag is held at the canvas edge (or past it), slide the view in
+  // that direction so the window can go beyond what is on screen. Runs
+  // every frame of a drag; the speed grows the further past the edge the
+  // pointer is. Waits until the pointer has really moved, so just grabbing
+  // a handle that sits near the edge doesn't send the view off.
+  function autoPanTick(ts) {
+    var d = wave.drag;
+    wave.panRaf = 0;
+    if (!d) return;
+    var dtMs = Math.min(64, d.pts ? ts - d.pts : 16);
+    d.pts = ts;
+    var cv = $("timer-beat-wave"), w = cv.clientWidth;
+    var x = waveXAt(d.cx), dir = 0, over = 0;
+    if (wave.zoom > 1 && Math.abs(d.cx - d.cx0) > 4) {
+      if (x < WAVE_BAND) { dir = -1; over = WAVE_BAND - x; }
+      else if (x > w - WAVE_BAND) { dir = 1; over = x - (w - WAVE_BAND); }
+    }
+    if (dir) {
+      var before = wave.vs;
+      // Views per second: 0.4 at the edge, up to 2.5 well past it.
+      wave.vs += dir * Math.min(2.5, 0.4 + over / 60) * viewSpan() *
+          dtMs / 1000;
+      clampView();
+      if (wave.vs !== before) dragWave(d.cx);
+    }
+    wave.panRaf = requestAnimationFrame(autoPanTick);
+  }
+
   function endWaveDrag(ev) {
     var d = wave.drag;
     if (!d) return;
     wave.drag = null;
+    if (wave.panRaf) { cancelAnimationFrame(wave.panRaf); wave.panRaf = 0; }
     try { $("timer-beat-wave").releasePointerCapture(d.id); } catch (e) { /* gone */ }
     if (beatSound.start !== d.start0 || beatSound.seconds !== d.len0) {
       saveBeatSelection();
     } else {
+      // Dragged back to where it was: the server's hit still applies.
+      beatSound.hit = d.hit0;
+      renderBeatSoundStatus();
+      drawWave();
       syncNotePending();
     }
+  }
+
+  // ---- zoom and pan input ---------------------------------------------
+  // Over the waveform a plain wheel zooms around the pointer (the owner
+  // asked for "dynamic zoom"), a pinch (ctrl + wheel) too, and sideways
+  // scroll or shift + wheel pans. preventDefault is only called for what
+  // is handled, so the page still scrolls under a pointer that is
+  // elsewhere, and scrolling OUT at 1x -- nothing left to zoom -- lets the
+  // page scroll on.
+  function wheelUnits(ev, v) {
+    return ev.deltaMode === 1 ? v * 16 : ev.deltaMode === 2 ? v * 400 : v;
+  }
+
+  function onWaveWheel(ev) {
+    var cv = $("timer-beat-wave");
+    if (!(waveDuration() > 0) || $("timer-beat-wave-block").hidden) return;
+    var w = cv.clientWidth;
+    if (!(w > 0)) return;
+    if (wave.drag) { ev.preventDefault(); return; }
+    var dx = wheelUnits(ev, ev.deltaX), dy = wheelUnits(ev, ev.deltaY);
+    var panning = !ev.ctrlKey &&
+        (ev.shiftKey || Math.abs(dx) > Math.abs(dy));
+    if (panning) {
+      if (wave.zoom <= 1.0001) return;          // nothing to pan
+      var amount = ev.shiftKey && !dx ? dy : dx;
+      wave.vs += amount / w * viewSpan();
+      clampView();
+      ev.preventDefault();
+      drawWave();
+      return;
+    }
+    if (!dy) return;
+    // Pinch deltas are small steps; a wheel notch is ~100.
+    var z = wave.zoom * Math.exp(-dy * (ev.ctrlKey ? 0.01 : 0.003));
+    z = Math.max(1, Math.min(ZOOM_MAX, z));
+    if (z === wave.zoom) {
+      // Already as far out as it goes: let the page scroll. As far IN:
+      // swallow it, a page that jumps while you hunt for a spot is worse.
+      if (z > 1) ev.preventDefault();
+      return;
+    }
+    ev.preventDefault();
+    var x = waveXAt(ev.clientX);
+    setZoom(z, xToT(x, w), Math.max(0, Math.min(1, x / w)));
+  }
+
+  // WebKit (the Mac app's web view) reports a pinch as gesture events
+  // rather than ctrl + wheel.
+  function wireWaveGestures(cv) {
+    cv.addEventListener("gesturestart", function (ev) {
+      ev.preventDefault();
+      wave.gest = { zoom: wave.zoom };
+    });
+    cv.addEventListener("gesturechange", function (ev) {
+      ev.preventDefault();
+      if (!wave.gest || !(ev.scale > 0) || !(waveDuration() > 0)) return;
+      var w = cv.clientWidth, x = waveXAt(ev.clientX);
+      if (!(w > 0)) return;
+      setZoom(wave.gest.zoom * ev.scale, xToT(x, w),
+              Math.max(0, Math.min(1, x / w)));
+    });
+    cv.addEventListener("gestureend", function (ev) {
+      ev.preventDefault();
+      wave.gest = null;
+    });
+  }
+
+  // The overview strip: drag the box to move around, click anywhere else to
+  // jump there (and keep dragging from that spot, so one press can both
+  // jump and fine-tune).
+  function wireOverview() {
+    var ov = $("timer-beat-wave-map");
+    function xOf(ev) {
+      return ev.clientX - ov.getBoundingClientRect().left - ov.clientLeft;
+    }
+    function moveTo(ev) {
+      var o = wave.ovDrag, w = ov.clientWidth, dur = waveDuration();
+      if (!o || !(w > 0) || !(dur > 0)) return;
+      wave.vs = xOf(ev) / w * dur - o.off;
+      clampView();
+      drawWave();
+    }
+    ov.addEventListener("pointerdown", function (ev) {
+      if (ev.button !== undefined && ev.button !== 0) return;
+      var w = ov.clientWidth, dur = waveDuration();
+      if (!(w > 0) || !(dur > 0)) return;
+      var box = overviewBox(w, 6), x = xOf(ev);
+      var t = x / w * dur;
+      // Inside the box: keep the spot grabbed under the pointer. Outside:
+      // the box jumps to centre on the click.
+      wave.ovDrag = { id: ev.pointerId,
+                      off: x >= box.x - 2 && x <= box.x + box.w + 2
+                          ? t - wave.vs : viewSpan() / 2 };
+      try { ov.setPointerCapture(ev.pointerId); } catch (e) { /* no capture */ }
+      ev.preventDefault();
+      moveTo(ev);
+    });
+    ov.addEventListener("pointermove", function (ev) {
+      if (wave.ovDrag) { moveTo(ev); return; }
+      var w = ov.clientWidth, box = overviewBox(w, 6), x = xOf(ev);
+      ov.style.cursor = x >= box.x - 2 && x <= box.x + box.w + 2
+          ? "grab" : "pointer";
+    });
+    function endOv() { wave.ovDrag = null; }
+    ov.addEventListener("pointerup", endOv);
+    ov.addEventListener("pointercancel", endOv);
+    ov.addEventListener("lostpointercapture", endOv);
+    // A wheel over the strip pans, the same as over the waveform.
+    ov.addEventListener("wheel", function (ev) {
+      if (wave.zoom <= 1.0001) return;
+      var w = ov.clientWidth;
+      if (!(w > 0)) return;
+      var dx = wheelUnits(ev, ev.deltaX), dy = wheelUnits(ev, ev.deltaY);
+      var amount = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+      if (!amount) return;
+      wave.vs += amount / w * waveDuration();
+      clampView();
+      ev.preventDefault();
+      drawWave();
+    }, { passive: false });
   }
 
   function wireWave() {
@@ -775,9 +1221,13 @@
       var mode = waveHit(waveX(ev));
       if (!mode) return;
       stopPlayback();
-      wave.drag = { mode: mode, x0: waveX(ev), id: ev.pointerId,
+      wave.drag = { mode: mode, id: ev.pointerId,
+                    t0: xToT(waveX(ev), cv.clientWidth),
+                    cx: ev.clientX, cx0: ev.clientX, pts: 0,
+                    hit0: beatSound.hit,
                     start0: beatSound.start, len0: beatSound.seconds,
                     end0: beatSound.start + beatSound.seconds };
+      wave.panRaf = requestAnimationFrame(autoPanTick);
       // The volunteer is choosing now; the old "shortened" note is theirs
       // to override.
       wave.shortened = null;
@@ -787,7 +1237,7 @@
     });
     cv.addEventListener("pointermove", function (ev) {
       if (wave.drag) {
-        dragWave(ev);
+        dragWave(ev.clientX);
         return;
       }
       var mode = waveHit(waveX(ev));
@@ -797,6 +1247,13 @@
     cv.addEventListener("pointerup", endWaveDrag);
     cv.addEventListener("pointercancel", endWaveDrag);
     cv.addEventListener("lostpointercapture", endWaveDrag);
+    cv.addEventListener("wheel", onWaveWheel, { passive: false });
+    wireWaveGestures(cv);
+    wireOverview();
+    $("timer-beat-zoom").addEventListener("input", zoomFromSlider);
+    $("timer-beat-zoom-reset").addEventListener("click", function () {
+      setZoom(1, 0, 0);
+    });
     $("timer-beat-play").addEventListener("click", function () {
       if (wave.playing) stopPlayback();
       else startPlayback();

@@ -443,6 +443,34 @@ button.tile:active { transform: translateY(0); }
   user-select: none;
   -webkit-user-select: none;
 }
+/* Overview strip (shown only while zoomed in) and the ZOOM slider row. */
+.beat-wave-map {
+  display: block;
+  width: 100%;
+  height: 18px;
+  margin-bottom: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.beat-wave-map[hidden] { display: none; }
+.beat-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.beat-zoom-label {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--ink-faint);
+}
+.beat-zoom-row .range-value { width: 44px; }
 .beat-wave-row {
   display: flex;
   align-items: center;

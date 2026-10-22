@@ -29,6 +29,12 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.45.0": [
+        "Beat opener: your sound's hit now lands exactly on the beat, even "
+        "from a rough window.",
+        "Zoom into your sound's waveform to pick a short hit out of a long "
+        "recording.",
+    ],
     "1.44.0": [
         "Timer: drag the numbers on the preview to place them — great for "
         "a gap in your artwork.",
