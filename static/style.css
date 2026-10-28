@@ -1499,23 +1499,29 @@ input[type="range"] {
 }
 .tl-wait { background: #23262b; color: var(--ink-dim); }
 .tl-spin { background: rgba(232, 180, 79, 0.28); color: var(--accent); }
+.tl-zoom { background: rgba(122, 140, 230, 0.22); color: #9aa8ee; }
 .tl-winner { background: rgba(63, 220, 123, 0.16); color: var(--green); }
 
 /* ---- Spinner AI fill ---- */
 .entries-foot {
   display: flex;
+  flex-wrap: wrap;          /* FORMAT + FILL WITH AI side by side; wrap if narrow */
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-top: 6px;
 }
+/* Both spinner AI buttons rest neutral. FILL WITH AI is a toggle for its
+   panel and goes solid gold only while that panel is open; TIDY MY LIST is
+   a one-click action and never lights up. Both gold-outlined, the owner
+   couldn't tell which one was in use. */
 .btn-ai {
   flex: none;
   padding: 7px 13px;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--line-2);
   border-radius: 8px;
-  background: rgba(232, 180, 79, 0.10);
-  color: var(--accent);
+  background: #1b1e23;
+  color: var(--ink);
   font-family: var(--display);
   font-weight: 600;
   font-size: 11px;
@@ -1524,7 +1530,73 @@ input[type="range"] {
   cursor: pointer;
   transition: background 0.12s;
 }
-.btn-ai:hover { background: rgba(232, 180, 79, 0.18); }
+.btn-ai:hover { border-color: var(--accent); }
+.btn-ai:disabled { opacity: 0.5; cursor: default; }
+
+/* A request that can take minutes (TIDY MY LIST, GENERATE): a small ring on
+   the button while it waits, so a long pause reads as "working", not
+   "frozen". Drawn as ::before so no markup is added to the button and it
+   vanishes with the class. The ring is the accent on the neutral TIDY
+   button and the dark ink on the gold GENERATE one. Reduced motion gets a
+   slow fade instead of a spin. */
+.btn-ai.is-busy:disabled, .btn.is-busy:disabled { opacity: 0.85; }
+.is-busy::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid rgba(232, 180, 79, 0.25);
+  border-top-color: var(--accent);
+  animation: board-reading-spin 0.8s linear infinite;
+}
+.btn-accent.is-busy::before {
+  border-color: rgba(20, 22, 26, 0.25);
+  border-top-color: #14161a;
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-busy::before { animation: busy-pulse 1.6s ease-in-out infinite; }
+}
+@keyframes busy-pulse { 50% { opacity: 0.35; } }
+
+/* Status line + its CANCEL link on one row. */
+.busy-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 12px;
+}
+.busy-row .link-btn { margin-top: 10px; }
+/* While waiting, the status reads as live, not as one more dim hint, and
+   CANCEL is the accent: the UX check found both easy to miss. */
+.busy-row .is-live { color: var(--ink); }
+#spinner-format-cancel, #ai-cancel { color: var(--accent); font-weight: 700; }
+/* The pair stays together; only a window too narrow for both stacks them
+   (still side by side with each other, never past the panel). */
+.ai-buttons { display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
+/* The spinner's Timing row holds four fields while Cinematic zoom is on;
+   they share the panel's width instead of running ~27 px past it at
+   1024 (UX check). */
+#spinner-tl ~ .duration-row .num-field { flex: 1 1 0; min-width: 0; }
+#spinner-tl ~ .duration-row .num-field input { width: 100%; min-width: 0; }
+#spinner-zoom-hint { margin-top: 4px; }
+/* A ZOOM value snapped into 2-30 flashes, so the change is seen. */
+.is-snapped { animation: snap-flash 0.9s ease-out; }
+@keyframes snap-flash {
+  0% { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(232, 180, 79, 0.35); }
+  100% { box-shadow: 0 0 0 0 rgba(232, 180, 79, 0); }
+}
+#spinner-ai-toggle[aria-expanded="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #14161a;
+}
+#spinner-ai-toggle[aria-expanded="true"]:hover {
+  background: var(--accent-hover, var(--accent));
+}
 .ai-panel {
   margin-top: 12px;
   padding: 14px;

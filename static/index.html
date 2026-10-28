@@ -720,9 +720,29 @@
             </div>
             <textarea id="spinner-entries" rows="8" spellcheck="false"
               placeholder="Alice&#10;Bob&#10;Carmen&#10;Dan"></textarea>
+            <!-- TIDY MY LIST's result sits under the box it changed. Below
+                 the buttons it read as part of the FILL WITH AI panel that
+                 opens there. -->
+            <!-- CANCEL sits beside the status while TIDY MY LIST waits (it can
+                 take minutes on a big list); the ring is on the button. -->
+            <div class="busy-row">
+              <p class="hint" id="spinner-format-status" hidden></p>
+              <button type="button" class="link-btn" id="spinner-format-cancel" hidden>CANCEL</button>
+            </div>
+            <button type="button" class="link-btn" id="spinner-format-undo" hidden>UNDO</button>
             <div class="entries-foot">
-              <p class="hint">2 to 100 entries, up to 40 characters each</p>
-              <button type="button" class="btn-ai" id="spinner-ai-toggle" aria-expanded="false">&#10022; FILL WITH AI</button>
+              <p class="hint">2 to 300 entries, up to 40 characters each (names show on the wheel up to 100)</p>
+              <!-- FORMAT WITH AI (spec: docs/specs/spinner-format.md): a messy
+                   paste -> one entry per line. Says where the text goes,
+                   because it is often people's names. -->
+              <!-- "TIDY MY LIST", not "FORMAT WITH AI": beside FILL WITH AI
+                   the two read as the same job (UX check). -->
+              <!-- One group, so a narrow window wraps the pair together
+                   instead of leaving FILL WITH AI alone on a row (UX check). -->
+              <div class="ai-buttons">
+                <button type="button" class="btn-ai" id="spinner-format" title="Sends this text to OpenRouter to sort it into one entry per line.">&#10022; TIDY MY LIST</button>
+                <button type="button" class="btn-ai" id="spinner-ai-toggle" aria-expanded="false">&#10022; FILL WITH AI</button>
+              </div>
             </div>
 
             <div class="ai-panel" id="spinner-ai-panel" hidden>
@@ -763,7 +783,10 @@
                   <button type="button" class="ai-link" id="ai-test-link">Test key</button>
                 </div>
               </div>
-              <p class="ai-status" id="ai-status" role="status" aria-live="polite"></p>
+              <div class="busy-row">
+                <p class="ai-status" id="ai-status" role="status" aria-live="polite"></p>
+                <button type="button" class="link-btn" id="ai-cancel" hidden>CANCEL</button>
+              </div>
             </div>
           </fieldset>
 
@@ -821,6 +844,7 @@
             <div class="tl-bar" id="spinner-tl" aria-hidden="true">
               <div class="tl-seg tl-wait" id="tl-wait" hidden><span>WAIT</span></div>
               <div class="tl-seg tl-spin" id="tl-spin"><span>SPIN</span></div>
+              <div class="tl-seg tl-zoom" id="tl-zoom" hidden><span>ZOOM</span></div>
               <div class="tl-seg tl-winner" id="tl-winner"><span>WINNER</span></div>
             </div>
             <div class="duration-row">
@@ -832,12 +856,25 @@
                 <label for="spinner-spin">SPIN</label>
                 <input type="number" id="spinner-spin" inputmode="numeric" min="2" max="30" step="1" value="7">
               </div>
+              <!-- Only while Cinematic zoom is ticked; the value is kept
+                   when it is hidden. -->
+              <div class="num-field" id="spinner-zoom-field" hidden>
+                <label for="spinner-zoom-secs">ZOOM</label>
+                <input type="number" id="spinner-zoom-secs" inputmode="numeric" min="2" max="30" step="1" value="6">
+              </div>
               <div class="num-field">
                 <label for="spinner-winner-secs">WINNER</label>
                 <input type="number" id="spinner-winner-secs" inputmode="numeric" min="1" max="30" step="1" value="4">
               </div>
             </div>
             <p class="hint" id="spinner-timing-hint">All in seconds. Total video: 11.8s</p>
+            <!-- Cinematic zoom (spec: docs/specs/spinner-zoom.md). Off by
+                 default; TEST SPIN previews the same camera move. -->
+            <div class="check-row">
+              <input type="checkbox" id="spinner-zoom">
+              <label for="spinner-zoom">Cinematic zoom</label>
+            </div>
+            <p class="hint" id="spinner-zoom-hint">After the spin, the camera pushes in on the arrow and the last names tick past slowly.<span id="spinner-zoom-hint-more" hidden> Set how long under ZOOM.</span> Best with a lot of names.</p>
           </fieldset>
 
           <button class="btn-export" id="spinner-export" type="submit">EXPORT MP4</button>

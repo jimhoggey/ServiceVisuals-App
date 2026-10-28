@@ -418,9 +418,11 @@ def validate_spinner_options(options):
     if len(entries) < 2:
         raise ValidationError(
             "The wheel needs at least 2 non-empty entries.")
-    if len(entries) > 100:
+    # 300 (was 100): a youth conference of 300 names (render/spinner.py's
+    # MAX_ENTRIES -- above 100 the slices carry no names).
+    if len(entries) > 300:
         raise ValidationError(
-            "The wheel supports at most 100 entries — you have {0}.".format(
+            "The wheel supports at most 300 entries — you have {0}.".format(
                 len(entries)))
 
     mode = options.get("mode", "random")
@@ -439,6 +441,14 @@ def validate_spinner_options(options):
         "winner_seconds": _int_field(
             options, "winner_seconds", 1, 30, 4, "Show-winner length"),
     }
+    zoom = options.get("zoom", False)
+    if not isinstance(zoom, bool):
+        raise ValidationError('"Cinematic zoom" must be true or false.')
+    clean["zoom"] = zoom
+    # The ZOOM phase (push-in, then the crawl past the arrow) has its own
+    # seconds, after SPIN; it only exists with the zoom on.
+    clean["zoom_seconds"] = _int_field(
+        options, "zoom_seconds", 2, 30, 6, "Zoom length")
 
     if mode == "rigged":
         winner = options.get("winner")

@@ -3363,6 +3363,283 @@ def check_beat_sound():
           == "builtin")
 
 
+def check_spinner_300():
+    """The wheel takes 300 entries (a youth conference's 300 names, was
+    100); above 100 the slices carry no names. A real 300-name render."""
+    from render.spinner import LABELS_MAX, render_spinner
+    from validation import ValidationError, validate_spinner_options
+    print("Spinner: up to 300 entries")
+    names = ["Person {0}".format(i) for i in range(1, 302)]
+    clean = validate_spinner_options({"entries": names[:300]})
+    check("300 entries validate", len(clean["entries"]) == 300)
+    try:
+        validate_spinner_options({"entries": names})
+        check("301 entries are refused", False, "no error")
+    except ValidationError as exc:
+        check("301 entries are refused",
+              str(exc) == "The wheel supports at most 300 entries — you "
+                          "have 301.", str(exc))
+    check("names show on the wheel up to 100", LABELS_MAX == 100)
+    name = render_spinner(dict(clean, wait_seconds=0, spin_seconds=2,
+                               winner_seconds=1), lambda p: None)
+    path = os.path.join(EXPORTS_DIR, name)
+    try:
+        info = probe(path)
+        check("a 300-name wheel renders", info["codec"] == "h264"
+              and info["duration"] and info["duration"] > 2.5, repr(info))
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def check_spinner_zoom():
+    """docs/specs/spinner-zoom.md: CINEMATIC ZOOM. Off by default (golden
+    guards that it changes nothing); on, the second half of the spin
+    pushes in until the close-up fills the frame, and holds there."""
+    from PIL import Image
+    from render.spinner import (ZOOM_MAX, ZOOM_MIN, render_spinner,
+                                zoom_amount, zoom_max, zoom_window)
+    from validation import ValidationError, validate_spinner_options
+    print("Spinner: cinematic zoom")
+    names = ["Person {0}".format(i) for i in range(1, 301)]
+    clean = validate_spinner_options({"entries": names})
+    check("zoom is off unless asked for", clean["zoom"] is False)
+    try:
+        validate_spinner_options({"entries": names, "zoom": "yes"})
+        check("a non-boolean zoom is refused", False, "no error")
+    except ValidationError as exc:
+        check("a non-boolean zoom is refused",
+              str(exc) == '"Cinematic zoom" must be true or false.',
+              str(exc))
+    z6, z300 = zoom_max(names[:6]), zoom_max(names)
+    # The owner: "I want to see like 10 names total on the big screen".
+    in_shot = 1920 / (2 * 3.14159 * 430 * z300 / 300.0)   # slices across
+    check("a small wheel leans in, 300 names go to ~10 in shot",
+          ZOOM_MIN <= z6 < z300 <= ZOOM_MAX and 8 <= in_shot <= 12,
+          "{0} {1} {2}".format(z6, z300, in_shot))
+    # The owner: "add this cinematic zoom as a time allocation thing":
+    # the ZOOM phase follows SPIN, push-in first, then the crawl.
+    t0, t1 = zoom_window(2.8, 2.0)
+    check("the push-in opens the ZOOM phase, then holds for the crawl",
+          abs(t0 - 2.8) < 1e-9 and abs(t1 - 3.7) < 1e-9 and
+          zoom_amount(2.8, t0, t1) == 0.0 and
+          0.0 < zoom_amount(3.2, t0, t1) < 1.0 and
+          zoom_amount(3.7, t0, t1) == 1.0 and
+          zoom_amount(9.0, t0, t1) == 1.0)
+    try:
+        validate_spinner_options({"entries": names, "zoom": True,
+                                  "zoom_seconds": 1})
+        check("a zoom under 2 seconds is refused", False, "no error")
+    except ValidationError as exc:
+        check("a zoom under 2 seconds is refused",
+              str(exc).startswith("Zoom length must be a whole number "
+                                  "between 2 and 30"), str(exc))
+    from render.spinner import zoom_rotation_at
+    seg = 1.2
+    final = 9 * 360.0 + 100.5 * seg
+    path_ = [zoom_rotation_at(k / 30.0, final, 0, 0.8, 2.8, 4.8, seg)
+             for k in range(0, 160)]
+    steps = [b - a for a, b in zip(path_[24:], path_[25:144])]
+    check("the wheel only ever slows from the spin into the zoom and "
+          "lands on the winner",
+          all(s >= -1e-6 for s in steps) and
+          all(b <= a + 1e-6 for a, b in zip(steps, steps[1:])) and
+          abs(path_[-1] - final) < 1e-6,
+          repr(steps[50:60]))
+    # wind-up 0.8 s, spin 2 s, zoom 2 s (push-in to 3.7 s): lands 4.8 s.
+    name = render_spinner(dict(clean, zoom=True, mode="rigged",
+                               winner="Person 100", wait_seconds=0,
+                               spin_seconds=2, zoom_seconds=2,
+                               winner_seconds=1),
+                          lambda p: None)
+    path = os.path.join(EXPORTS_DIR, name)
+    frame_dir = tempfile.mkdtemp(prefix="sv-zoom-")
+    try:
+        check("a zoomed export is marked _zoom", "_zoom" in name, name)
+        shade = {}
+        for t in (1.0, 4.5):
+            out = os.path.join(frame_dir, "{0}.png".format(t))
+            subprocess.run([FFMPEG, "-y", "-ss", str(t), "-i", path,
+                            "-frames:v", "1", out],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            im = Image.open(out).convert("L")
+            # Bottom-left: background at 1x, slices once zoomed; the top
+            # middle: background at 1x, the big arrow once zoomed.
+            shade[t] = (sum(im.crop((0, 700, 300, 1000)).getdata())
+                        / 90000.0,
+                        sum(im.crop((930, 300, 990, 420)).getdata())
+                        / 7200.0)
+        check("whole wheel before the push-in, close-up after it",
+              shade[1.0][0] < 40 and shade[4.5][0] > 80, repr(shade))
+        check("the big arrow fills the top half of the close-up",
+              shade[1.0][1] < 40 and shade[4.5][1] > 200, repr(shade))
+        check("a zoomed export runs wait + 0.8 + spin + zoom + winner",
+              abs(probe(path)["duration"] - 5.8) < 0.1,
+              repr(probe(path)))
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def check_ai_format():
+    """docs/specs/spinner-format.md: FORMAT WITH AI. OpenRouter is faked:
+    the guard drops what the model invents, keeps order, duplicates and
+    long entries, returns 100+ untouched, and the route's errors."""
+    import io
+    import aiassist
+    import app as _app
+    import stats
+    print("Spinner: FORMAT WITH AI (faked OpenRouter)")
+
+    reply = {"content": "[]"}
+    sent = []
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def echo(text):
+        # Answers the piece it was sent, as a good model would: a long
+        # list goes out in pieces, so a fixed reply can't stand in for it.
+        return json.dumps([s.strip() for s in re.split(r"[,;:\n]", text)
+                           if s.strip()])
+
+    def fake_urlopen(req, timeout=30):
+        body = json.loads(req.data.decode("utf-8"))
+        sent.append(body)
+        content = reply["content"]
+        if callable(content):
+            content = content(body["messages"][-1]["content"])
+        return _Resp(json.dumps({"choices": [{"message": {
+            "content": content}}]}).encode())
+
+    saved_urlopen = aiassist.netutil.urlopen
+    saved_key = os.environ.get("OPENROUTER_API_KEY")
+    os.environ["OPENROUTER_API_KEY"] = "sk-or-smoke-not-real"
+    aiassist.netutil.urlopen = fake_urlopen
+    client = _app.app.test_client()
+    try:
+        messy = ("Anna Lee, Ben Ortiz;Carmen Diaz\n\nDan  Wu, Dan Wu\n"
+                 "Elisabeth Montgomery-Fairweather the Third")
+        reply["content"] = json.dumps(
+            ["Anna Lee", "Ben Ortiz", "Carmen Diaz", "Dan Wu", "Dan Wu",
+             "Elisabeth Montgomery-Fairweather the Third", "Zara Invented"])
+        resp = client.post("/api/ai/format", json={"text": messy})
+        body = resp.get_json()
+        check("messy text comes back one entry each, in order",
+              resp.status_code == 200 and body["entries"][:4]
+              == ["Anna Lee", "Ben Ortiz", "Carmen Diaz", "Dan Wu"],
+              repr(body))
+        check("an entry the AI invented is dropped and counted",
+              "Zara Invented" not in body["entries"] and body["dropped"] == 1)
+        check("duplicates and long entries are kept as written",
+              body["entries"].count("Dan Wu") == 2 and
+              "Elisabeth Montgomery-Fairweather the Third" in body["entries"])
+        check("tidying asks for temperature 0",
+              sent and sent[-1].get("temperature") == 0)
+        check("the reply says which model tidied it",
+              body.get("model") == "openrouter/auto", repr(body))
+
+        names = ["Person {0}".format(i) for i in range(150)]
+        reply["content"] = echo
+        body = client.post("/api/ai/format",
+                           json={"text": ", ".join(names)}).get_json()
+        check("150 names all come back (the wheel's own limit decides)",
+              len(body["entries"]) == 150, str(len(body.get("entries", []))))
+
+        for payload, message in (
+                ({"text": "   "}, aiassist.ERR_FORMAT_EMPTY),
+                ({"text": 5}, aiassist.ERR_FORMAT_EMPTY),
+                ({"text": "x" * 15001}, aiassist.ERR_FORMAT_LONG)):
+            resp = client.post("/api/ai/format", json=payload)
+            check("refused: {0}".format(message),
+                  resp.status_code == 400
+                  and resp.get_json()["error"] == message,
+                  repr(resp.get_json()))
+        # The owner hit the old 6,000 cap with a 300-name list: a realistic
+        # 300 full names (~5,600 characters) must go through, and the
+        # request must give the reply room for all of them.
+        full = ["Firstname{0} Lastname{0}".format(i) for i in range(300)]
+        reply["content"] = echo
+        del sent[:]
+        resp = client.post("/api/ai/format", json={"text": ", ".join(full)})
+        check("a 300-name list (beyond the old 6,000 cap) is tidied, "
+              "in order",
+              resp.status_code == 200 and
+              resp.get_json()["entries"] == full and
+              all(s.get("max_tokens") == aiassist.FORMAT_MAX_TOKENS
+                  for s in sent),
+              repr(resp.get_json())[:120])
+        # The owner's 300 names sat on "Tidying…" for 3 minutes in one
+        # request; pieces go side by side, on the router's paid choice.
+        check("a long list is tidied in pieces, not one huge reply",
+              len(sent) >= 3, str(len(sent)))
+        check("tidying doesn't hold the router to the low cost tier",
+              not any("plugins" in s for s in sent), repr(sent[0])[:160])
+        pieces = aiassist._format_chunks(
+            "Anna Lee, " * 200 + "Ben Ortiz\nCarmen Diaz")
+        check("pieces are cut only between entries",
+              all(p.rstrip().endswith((",", "Ortiz\n", "Diaz"))
+                  or p.endswith(", ") for p in pieces[:-1]) and
+              "".join(pieces) == "Anna Lee, " * 200 + "Ben Ortiz\nCarmen Diaz",
+              repr([p[-12:] for p in pieces]))
+        # A reply cut short (the token cap) still parses; it must be an
+        # error rather than quietly lose the rest of the list.
+        reply["content"] = lambda text: json.dumps(
+            json.loads(echo(text))[:20])
+        resp = client.post("/api/ai/format", json={"text": ", ".join(full)})
+        check("a reply that stops part-way is refused, nothing lost",
+              resp.status_code == 400 and resp.get_json()["error"]
+              == aiassist.ERR_FORMAT_PARTIAL, repr(resp.get_json()))
+        # A model once returned "Sophie Hassan 0"-style entries without
+        # their numbers; letters alone didn't catch it.
+        numbered = ["Kid {0} Team {1}".format(i, i % 7) for i in range(40)]
+        reply["content"] = lambda text: json.dumps(
+            [re.sub(r"\s*\d+$", "", s) for s in json.loads(echo(text))])
+        resp = client.post("/api/ai/format",
+                           json={"text": ", ".join(numbered)})
+        check("numbers dropped from entries are refused, nothing lost",
+              resp.status_code == 400 and resp.get_json()["error"]
+              == aiassist.ERR_FORMAT_PARTIAL, repr(resp.get_json()))
+        listed = "\n".join("{0}. Anna Lee{0}".format(i) for i in range(1, 9))
+        reply["content"] = lambda text: json.dumps(
+            ["Anna Lee{0}".format(i) for i in range(1, 9)])
+        resp = client.post("/api/ai/format", json={"text": listed})
+        check("list numbering (1. 2. 3.) is the AI's to drop",
+              resp.status_code == 200 and
+              len(resp.get_json()["entries"]) == 8, repr(resp.get_json()))
+        # One bad piece among good ones: half a tidied list would lose
+        # the other half's names, so the whole tidy is refused.
+        calls = {"n": 0}
+
+        def one_bad(text):
+            calls["n"] += 1
+            return "Sorry." if "Firstname150 " in text else echo(text)
+        reply["content"] = one_bad
+        resp = client.post("/api/ai/format", json={"text": ", ".join(full)})
+        check("one piece failing refuses the whole tidy",
+              resp.status_code == 400 and calls["n"] > 2,
+              repr(resp.get_json()))
+        reply["content"] = "Sorry, I can't help with that."
+        resp = client.post("/api/ai/format", json={"text": "a, b"})
+        check("a useless reply is a plain-English error",
+              resp.status_code == 400 and
+              resp.get_json()["error"] == aiassist.ERR_FORMAT_NOTHING)
+        check("ai_format is a declared analytics event",
+              "ai_format" in stats.EVENTS)
+    finally:
+        aiassist.netutil.urlopen = saved_urlopen
+        if saved_key is None:
+            os.environ.pop("OPENROUTER_API_KEY", None)
+        else:
+            os.environ["OPENROUTER_API_KEY"] = saved_key
+
+
 def check_ai_model_routing():
     """Spinner Fill with AI: the default model is openrouter/auto held to
     its low cost tier, and an account with no credit (402) falls back to
@@ -4364,6 +4641,9 @@ def main():
     check_beat_opener()
     check_beat_sound()
     check_digits_placement()
+    check_ai_format()
+    check_spinner_300()
+    check_spinner_zoom()
     check_ai_model_routing()
     print()
     check_millis_size_and_ticking()

@@ -25,6 +25,7 @@ import re
 import socket
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 import netutil
 
@@ -208,24 +209,29 @@ class _Retry(Exception):
         self.message = message
 
 
-def _chat(key, model, messages):
+def _chat(key, model, messages, temperature=0.8, max_tokens=4000,
+          cost_tier="low", timeout=TIMEOUT, meta=None):
     """One OpenRouter call. Returns the assistant content string. Raises
-    AiError (fatal) or _Retry (try the fallback model)."""
+    AiError (fatal) or _Retry (try the fallback model). `cost_tier` None
+    leaves the auto router to its own (paid) choice; a `meta` dict gets
+    the model that answered."""
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": 0.8,
+        # 0.8 for inventing entries (variety); format_entries passes 0,
+        # because tidying someone's list must not get creative.
+        "temperature": temperature,
         # Generous: a full 100-item list is ~1k tokens of JSON, and some free
         # models spend tokens on reasoning first. 800 used to truncate long
         # lists mid-array, which corrupted the parse.
-        "max_tokens": 4000,
+        "max_tokens": max_tokens,
     }
     # No "reasoning" effort setting: OpenRouter documents that a model
     # without reasoning can reject it with a 400, which would cost a
     # wasted round trip and a fallback on every fill. The low cost tier
     # already steers auto toward small, quick models.
-    if model == DEFAULT_MODEL:
-        payload["plugins"] = [dict(AUTO_ROUTER_PLUGIN)]
+    if model == DEFAULT_MODEL and cost_tier:
+        payload["plugins"] = [dict(AUTO_ROUTER_PLUGIN, cost_tier=cost_tier)]
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         ENDPOINT, data=body, method="POST",
@@ -236,7 +242,7 @@ def _chat(key, model, messages):
             "HTTP-Referer": "https://github.com/jimhoggey/ServiceVisuals-App",
         })
     try:
-        with netutil.urlopen(req, timeout=TIMEOUT) as resp:
+        with netutil.urlopen(req, timeout=timeout) as resp:
             data = json.load(resp)
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
@@ -268,6 +274,9 @@ def _chat(key, model, messages):
     except ValueError:
         raise _Retry("OpenRouter sent back something unreadable.")
 
+    if meta is not None and isinstance(data, dict):
+        # The model the router actually picked, e.g. "openai/gpt-6-luna".
+        meta["model"] = str(data.get("model") or model)
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
@@ -333,3 +342,194 @@ def generate_entries(description, count, existing, model=None, full=False):
         last_message = "The AI didn't return a usable list — try rewording."
 
     raise AiError(last_message)
+
+
+# ---------------------------------------------------------------- format
+# FORMAT WITH AI (docs/specs/spinner-format.md): a messy paste -- 150 names
+# on one line, commas here and new lines there -- sorted into one entry per
+# line. Tidying, not writing: the model may only re-separate what is there.
+
+# 15,000 characters covers a 300-name list (the wheel's maximum) with room.
+FORMAT_MAX_CHARS = 15000
+# The owner's 300 names sat on "Tidying…" for 3 minutes: in one request
+# the low-cost router picked a reasoning model that spent all 12,000
+# tokens thinking and returned nothing, then the free pool queued. The
+# reply is the whole list again, so its length is the wait -- split the
+# paste into pieces of about 60 names and tidy them side by side. A
+# 300-name list now takes about as long as one piece (~5-10 s).
+FORMAT_CHUNK_CHARS = 1200
+FORMAT_WORKERS = 8
+FORMAT_MAX_TOKENS = 6000      # per piece: ~60 names, plus reasoning room
+FORMAT_TIMEOUT = 60           # per piece, so a stall is seconds not minutes
+# Tidying runs on the auto router's own choice, not the low cost tier the
+# fills use: the owner has a paid key, and the low tier's pick is what
+# stalled. A piece costs a fraction of a cent.
+FORMAT_COST_TIER = None
+# A reply cut short by the token cap still parses -- the salvage in
+# _format_items keeps every complete item -- and would silently lose the
+# last names. If the kept items cover less than this share of the
+# pasted text's letters, it's an error, not a quiet loss.
+# Letters only, so numbering ("1.", "2)") the AI rightly drops doesn't
+# count against it; 0.85 leaves room for a dropped heading like "Names:".
+FORMAT_MIN_COVERAGE = 0.85
+ERR_FORMAT_EMPTY = "Paste some entries first."
+ERR_FORMAT_LONG = ("That's a lot to tidy at once — paste up to 15,000 "
+                   "characters.")
+ERR_FORMAT_PARTIAL = ("The AI only got through part of your list, so "
+                      "nothing was changed — try again, or tidy it in two "
+                      "halves.")
+ERR_FORMAT_NOTHING = ("The AI couldn't sort that out — try again, or tidy a "
+                      "part of it by hand.")
+ERR_FORMAT_NO_KEY = ("Add your OpenRouter key first — click FILL WITH AI "
+                     "and paste it there.")
+
+
+# "1. ", "12) " or "3 - " at the start of a line: list numbering.
+_NUMBERING_RE = re.compile(r"(?m)^\s*\d{1,3}\s*[.)\-:]\s+")
+
+
+def _squash(text):
+    """Lower-case, every run of spaces/separators to one space: the form in
+    which a returned item is looked for in the pasted text."""
+    return " ".join(re.sub(r"[\s,;|/\t]+", " ", str(text)).lower().split())
+
+
+def _format_items(content):
+    """The reply's list, full length and in order -- unlike _parse_entries,
+    nothing is truncated to 40 characters or de-duplicated: two people can
+    share a name, and a too-long entry is the wheel's error to show."""
+    text = (content or "").strip()
+    match = re.search(r"\[.*\]", text, re.S)
+    items = []
+    if match:
+        try:
+            arr = json.loads(match.group(0))
+            if isinstance(arr, list):
+                items = [str(x) for x in arr]
+        except ValueError:
+            items = []
+    if not items:
+        bracket = text.find("[")
+        if bracket != -1:
+            items = re.findall(r'"((?:[^"\\]|\\.)+)"', text[bracket:])
+    return [" ".join(i.split()) for i in items if i.strip()]
+
+
+def format_entries(text, model=None):
+    """Sort pasted `text` into separate entries. Returns (entries, dropped):
+    `dropped` counts items the model returned that are not in the text --
+    a model asked to tidy a list of names can still "helpfully" add or
+    correct one, and a church's list must come back as it went in.
+    Raises AiError with a plain-English message."""
+    if not isinstance(text, str) or not text.strip():
+        raise AiError(ERR_FORMAT_EMPTY)
+    if len(text) > FORMAT_MAX_CHARS:
+        raise AiError(ERR_FORMAT_LONG)
+    key = get_key()
+    if not key:
+        # Says where the key goes: the button sits beside FILL WITH AI,
+        # whose panel holds it, and "the AI panel" didn't say so.
+        raise AiError(ERR_FORMAT_NO_KEY)
+    chosen = _clean_model(model) or get_model()
+    # The auto router picks afresh each call, so a piece it fumbled (cut
+    # short, numbers dropped) gets a second go there before the slower
+    # free pool -- one bad piece otherwise fails the whole tidy.
+    chain = [chosen] if chosen == FALLBACK_MODEL else [chosen, FALLBACK_MODEL]
+    if chosen == DEFAULT_MODEL:
+        chain.insert(1, DEFAULT_MODEL)
+    pieces = _format_chunks(text)
+    if len(pieces) == 1:
+        results = [_format_piece(key, chain, pieces[0])]
+    else:
+        with ThreadPoolExecutor(
+                max_workers=min(FORMAT_WORKERS, len(pieces))) as pool:
+            results = list(pool.map(
+                lambda piece: _format_piece(key, chain, piece), pieces))
+    failed = [r for r in results if isinstance(r, AiError)]
+    if failed:
+        # One piece failing fails the lot: half a tidied list pasted over
+        # the original would lose the other half's names.
+        raise failed[0]
+    kept = [item for r in results for item in r[0]]
+    # The owner asked to see which model did the tidy ("auto" picks one
+    # per call, so the pieces of a long list can differ).
+    models = []
+    for r in results:
+        if r[2] not in models:
+            models.append(r[2])
+    return kept, sum(r[1] for r in results), ", ".join(models)
+
+
+def _format_chunks(text):
+    """Split `text` into pieces of about FORMAT_CHUNK_CHARS, cut only just
+    after a separator -- a new line first, then , ; |, then a colon, and
+    only failing all of those a space -- so no name is cut in two."""
+    pieces = []
+    start = 0
+    while len(text) - start > FORMAT_CHUNK_CHARS:
+        window = text[start:start + FORMAT_CHUNK_CHARS]
+        cut = -1
+        for seps in ("\n", ",;|\t", ":", " "):
+            cut = max(window.rfind(s) for s in seps)
+            if cut > FORMAT_CHUNK_CHARS // 2:
+                break
+        if cut <= 0:
+            cut = len(window) - 1
+        pieces.append(text[start:start + cut + 1])
+        start += cut + 1
+    pieces.append(text[start:])
+    return [p for p in pieces if p.strip()]
+
+
+def _format_piece(key, chain, text):
+    """Tidy one piece. Returns (kept, dropped), or the AiError to raise
+    (returned, not raised, so every parallel piece gets to finish)."""
+    messages = [
+        {"role": "system", "content": (
+            "You split messy pasted text into the separate items of a list "
+            "for a spinner wheel. Return ONLY a JSON array of strings, in "
+            "the original order -- no prose, no numbering, no markdown. "
+            "Keep every item exactly as written: fix only the separators "
+            "and the spaces around items. Do not add, remove, merge, "
+            "correct, translate, sort or invent anything. A person's full "
+            "name (first and last name) is ONE item. Keep numbers, "
+            "initials and brackets that are part of an item.")},
+        {"role": "user", "content": text},
+    ]
+    haystack = _squash(text)
+    letters = sum(ch.isalpha() for ch in text) or 1
+    # Digits are checked on their own: a model once returned 72 of 300
+    # "Sophie Hassan 0"-style entries without their numbers, and letters
+    # alone couldn't see it. List numbering ("1.", "2)") is the model's
+    # to drop, so it doesn't count.
+    digits = sum(ch.isdigit() for ch in _NUMBERING_RE.sub(" ", text))
+    last_message = ERR_FORMAT_NOTHING
+    for attempt_model in chain:
+        meta = {}
+        try:
+            content = _chat(key, attempt_model, messages, temperature=0,
+                            max_tokens=FORMAT_MAX_TOKENS,
+                            cost_tier=FORMAT_COST_TIER,
+                            timeout=FORMAT_TIMEOUT, meta=meta)
+        except AiError as exc:
+            return exc
+        except _Retry as retry:
+            last_message = retry.message
+            continue
+        items = _format_items(content)
+        kept = [i for i in items if _squash(i) and _squash(i) in haystack]
+        if not kept:
+            last_message = ERR_FORMAT_NOTHING
+            continue
+        covered = sum(ch.isalpha() for item in kept for ch in item)
+        kept_digits = sum(ch.isdigit() for item in kept
+                          for ch in _NUMBERING_RE.sub(" ", item))
+        if (covered < FORMAT_MIN_COVERAGE * letters or
+                kept_digits < FORMAT_MIN_COVERAGE * digits):
+            # Cut short (the token cap, a model that gave up): returning it
+            # would quietly delete the rest of someone's list.
+            last_message = ERR_FORMAT_PARTIAL
+            continue
+        return (kept, len(items) - len(kept),
+                meta.get("model") or attempt_model)
+    return AiError(last_message)

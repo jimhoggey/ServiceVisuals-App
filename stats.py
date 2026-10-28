@@ -85,6 +85,7 @@ EVENTS = (
     "board_number_added",  # a number OCR missed was added by hand
     "ocr_failed",       # scoreboard OCR found nothing usable
     "ai_fill",          # the spinner's AI fill was used
+    "ai_format",        # the spinner's FORMAT WITH AI was used (no props)
     "whats_new_shown",  # the "what's new" card was shown after an update
     "update_installed",  # a self-update completed
     "update_failed",    # a self-update did not apply

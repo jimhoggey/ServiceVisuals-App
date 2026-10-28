@@ -29,6 +29,13 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.46.0": [
+        "Spinner: Cinematic zoom pushes in on the arrow and ticks past the "
+        "last names. Set its time under ZOOM.",
+        "Spinner wheels now take up to 300 entries.",
+        "TIDY MY LIST sorts a messy pasted list into one name per line.",
+        "The AI buttons show they're working, with a CANCEL to stop them.",
+    ],
     "1.45.0": [
         "Beat opener: your sound's hit now lands exactly on the beat, even "
         "from a rough window.",

@@ -37,6 +37,7 @@ BUILTIN_CALLS = set("""
     isNaN isFinite String Number Boolean Array Object Image Date
     Error FormData Blob URL Promise encodeURIComponent
     decodeURIComponent alert confirm Uint8Array Math JSON
+    AbortController
 """.split())
 
 # Reserved words that can be immediately followed by "(" in ordinary

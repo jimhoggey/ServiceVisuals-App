@@ -480,6 +480,95 @@ there is anything on disk to delete, however broken.
 
 ## Spinner tile
 
+### Format with AI
+
+The owner's case: paste "like 150 names of people" in any shape — all on
+one line, commas, some new lines — and get one entry per line (spec:
+`docs/specs/spinner-format.md`). The operator's model: "tidy my list",
+not "rewrite it", so the server drops anything the AI returns that isn't
+in the pasted text, and UNDO puts the paste back until the box is edited.
+More than 100 entries all come back, with a "remove N" message; the
+wheel's own limit still blocks Export. The button's tooltip says the text
+goes to OpenRouter, because it is often people's names.
+
+**Found and fixed** (UX check, before release)
+- Named FORMAT WITH AI beside FILL WITH AI, the two read as the same job —
+  renamed ✦ TIDY MY LIST.
+- A successful tidy was styled red, reading as a failure — now neutral
+  (amber only when over 100).
+- The OpenRouter disclosure was tooltip-only — the "Tidying" status now
+  says it on screen.
+- "Put your text back as it was." read as an instruction — now "Undone —
+  your text is back as you pasted it."
+- The no-key message pointed at "the AI panel" — now says to click FILL
+  WITH AI and paste the key there.
+- The owner, testing it: "it isn't clear if I'm doing fill with AI or tidy
+  my list" — both buttons were gold-outlined. Now both rest neutral; FILL
+  WITH AI is a toggle that goes solid gold only while its panel is open,
+  TIDY MY LIST is a plain one-click button, and its result line sits
+  under the entries box instead of above the Fill panel.
+- The owner pasted 300 names: "it still says tidying but there's no
+  cancel button ... I stopped waiting after three minutes." One request
+  had gone to a low-tier reasoning model that thought through all 12,000
+  tokens and answered nothing, then fell back to the queued free pool
+  (90 s each). Now the list goes out in ~60-name pieces side by side, on
+  the paid auto router's own pick: 300 names in about 15 s. While it
+  waits the button shows a spinner, the status counts seconds, and
+  CANCEL (or a 150 s cap) gives the text back untouched. Same spinner and
+  CANCEL on FILL WITH AI's GENERATE.
+- In that test 72 of 300 "Sophie Hassan 0"-style entries came back
+  without their numbers and the letters-only guard let it through. Digits
+  are now checked too (list numbering like "1." excepted), and a piece
+  that fails gets a second try on auto before the whole tidy is refused.
+- The owner asked to see which model did it: the result line ends
+  "Model: openai/gpt-6-luna." (several, comma-separated, if the pieces
+  went to different ones).
+
+### Cinematic zoom
+
+A spinner toggle for the 300-name youth conference (spec:
+`docs/specs/spinner-zoom.md`). The owner's picture: the camera pushes in
+on the arrow until about ten names fill the big screen, the rim still
+curving across the top "so it still looks like a circle", the big arrow
+in shot "as to where it's going to land", and the last names ticking
+past slowly "to really build hype". On landing every other slice sinks
+into shadow and the WINNER card fades in.
+
+**Found and fixed** (unreleased, before v1.46.0)
+- First cut zoomed to 12x on the label ring: names readable, but the rim
+  and arrow had left the shot and it read as stripes, not a wheel. Now
+  ~10 names at the rim (≈21x for 300), names hang from the rim below
+  the arrow tip, the arrow grows to 3.5x, and the spin's tail is longer
+  (quartic) with the arrow flicking at each name.
+- The WINNER card sat on the start of the winner's name — names now end
+  above it, and the losing slices dim so the winner reads first.
+- The owner: "Why does it first zoom towards the middle and then move
+  up? That looks a bit weird." The camera's pan lagged its zoom. Now one
+  straight push-in on the arrow: the rim's top glides down to the middle
+  of the screen, the wheel fills the bottom half, the big arrow the top
+  half, and the WINNER card goes above the arrow.
+- The owner wanted the zoom as its own time: "a spin, but then ... slowly
+  zoom in, but then have some suspense build while it's ticking over
+  each of the names." A ZOOM seconds field (default 6) now follows SPIN
+  in the timeline: push-in first, then about five names crawl past.
+
+**Found and fixed** (scoped UX check of the round above, unreleased)
+- With zoom ticked the 4-field Timing row and timing bar overflowed the
+  left panel by ~27 px at 1024 — the fields now share the width (checked
+  at 1024, 900, 768).
+- The hint's "Set how long under ZOOM" showed while the ZOOM field was
+  hidden — that sentence now appears only when ticked. Rule for every
+  screen: a hint must not describe a control that isn't visible in the
+  current state.
+- TIDY / GENERATE busy state: the dim status and CANCEL were easy to
+  miss — the status is bright while waiting, CANCEL is gold, and past
+  10 s it adds "Still working — a long list can take 30 seconds."
+- ZOOM seconds out of range (50, 1) weren't clamped and Total video
+  disagreed with the field — it snaps into 2–30 on leaving the field,
+  with a flash.
+- At 768, FILL WITH AI wrapped alone below TIDY MY LIST — the pair is
+  one group now and wraps together.
+
 ### Fill with AI
 
 The operator's model: "type what I need, get a list, quickly." They paste

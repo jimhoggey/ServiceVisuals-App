@@ -81,3 +81,22 @@ def api_ai_generate():
         return jsonify({"error": str(exc)}), 400
     stats.track("ai_fill")
     return jsonify({"entries": entries})
+
+
+@bp.route("/api/ai/format", methods=["POST"])
+def api_ai_format():
+    """FORMAT WITH AI (docs/specs/spinner-format.md): pasted text -> one
+    entry per line. {"text"} -> {"entries", "dropped"}."""
+    data, error = json_body("Body must be JSON.")
+    if error:
+        return error
+    model = data.get("model")
+    if model is not None and not isinstance(model, str):
+        model = None
+    try:
+        entries, dropped, used = aiassist.format_entries(
+            data.get("text"), model)
+    except aiassist.AiError as exc:
+        return jsonify({"error": str(exc)}), 400
+    stats.track("ai_format")       # never the text: it's people's names
+    return jsonify({"entries": entries, "dropped": dropped, "model": used})

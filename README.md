@@ -13,9 +13,15 @@ machine.
 Grab the latest build from the
 [**Releases page**](https://github.com/jimhoggey/ServiceVisuals-App/releases):
 
-**Mac** — download `ServiceVisuals-mac.zip`, unzip, then **drag Service Visuals
-into your Applications folder** and open it from there (Launchpad or Spotlight).
-First open only: the app is unsigned, so right-click it → **Open** → **Open**.
+**Mac** (Apple Silicon — M1 or newer; Intel Macs aren't supported) — download
+`ServiceVisuals-mac.zip`, unzip, then **drag Service Visuals into your
+Applications folder** and open it from there (Launchpad or Spotlight).
+First open only, because the app isn't signed with an Apple Developer ID yet:
+double-click it, press **Done** on the "Apple could not verify…" message, then
+open **System Settings → Privacy & Security**, scroll down to the message about
+Service Visuals and click **Open Anyway**, and confirm with your Mac's password.
+(On macOS 14 and older, right-click the app → **Open** → **Open** also works.)
+No Terminal needed, and updates after that open normally.
 
 > Moving it to Applications isn't optional housekeeping. If you run it straight
 > from Downloads, macOS launches a temporary read-only copy of it
@@ -101,7 +107,11 @@ contain a file path). The full list of events lives in [`stats.py`](stats.py).
      and other editors, or the larger ProRes 4444 `.mov` for documented
      ProPresenter compatibility.
    - **Spinner**: one entry per line (2–100), Random or Choose-winner mode,
-     accent colour. Try **Test Spin** in the preview. **Fill with AI** can
+     accent colour. Try **Test Spin** in the preview. Pasted a messy list —
+     names all on one line, commas here and new lines there? **Tidy my
+     list** sorts it into one entry per line, exactly as written (anything the
+     AI adds that wasn't in your text is left out), with **Undo** to put it
+     back. It sends the text to OpenRouter with your key, like Fill with AI. **Fill with AI** can
      top up the wheel — type what you need (e.g. "books of the Bible", "world
      capitals") and either give an exact number or tick **Full list** to let
      the AI return the complete set. Uses your own
