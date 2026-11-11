@@ -171,3 +171,8 @@ PyInstaller + pywebview) on every `v*` tag.
 
 - Automatic import into ProPresenter (currently manual drag-in)
 - More visual types — the tile grid is built to grow
+
+---
+
+Made by [Fynn Projects](https://www.fynnprojects.com.au), custom apps for
+church production teams, trades and small businesses.
