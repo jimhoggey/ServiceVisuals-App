@@ -1,6 +1,10 @@
 flask>=3.0
 pillow>=10.0
-imageio-ffmpeg>=0.5
+# Pinned: this wheel IS the ffmpeg every user's app ships with. ">=0.5" let
+# the v1.47.0 CI build pick up a newer one (ffmpeg 8, which dropped
+# -vsync) that nothing here had been tested on. Bump it on purpose, with
+# golden and the byte-identical timer check, never by accident.
+imageio-ffmpeg==0.6.0
 segno>=1.6
 certifi>=2024.2.2
 

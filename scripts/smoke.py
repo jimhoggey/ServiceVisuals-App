@@ -3920,7 +3920,8 @@ def check_millis_reveal_render():
             proc = subprocess.run(
                 [FFMPEG, "-y", "-i", path,
                  "-vf", "select='eq(n\\, {0})'".format(idx),
-                 "-vsync", "0", "-frames:v", "1", frame_path],
+                 # -fps_mode, not -vsync: ffmpeg 8 removed -vsync.
+                 "-fps_mode", "passthrough", "-frames:v", "1", frame_path],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             ok = os.path.isfile(frame_path)
             check("frame {0} extracts cleanly".format(idx), ok,
@@ -4024,7 +4025,7 @@ def check_millis_reveal_alpha_fringe():
         frame_path = os.path.join(frame_dir, "frame30.png")
         proc = subprocess.run(
             [FFMPEG, "-y", "-i", path,
-             "-vf", "select='eq(n\\, 30)'", "-vsync", "0",
+             "-vf", "select='eq(n\\, 30)'", "-fps_mode", "passthrough",
              "-frames:v", "1", "-pix_fmt", "rgba", frame_path],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         got_frame = os.path.isfile(frame_path)
@@ -4228,7 +4229,8 @@ def check_millis_60fps_render():
             proc = subprocess.run(
                 [FFMPEG, "-y", "-i", path,
                  "-vf", "select='eq(n\\, {0})'".format(idx),
-                 "-vsync", "0", "-frames:v", "1", frame_path],
+                 # -fps_mode, not -vsync: ffmpeg 8 removed -vsync.
+                 "-fps_mode", "passthrough", "-frames:v", "1", frame_path],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             ok = os.path.isfile(frame_path)
             check("frame {0} extracts cleanly".format(idx), ok,
@@ -4323,7 +4325,7 @@ def check_millis_60fps_alpha_fringe():
         frame_path = os.path.join(frame_dir, "frame60.png")
         proc = subprocess.run(
             [FFMPEG, "-y", "-i", path,
-             "-vf", "select='eq(n\\, 60)'", "-vsync", "0",
+             "-vf", "select='eq(n\\, 60)'", "-fps_mode", "passthrough",
              "-frames:v", "1", "-pix_fmt", "rgba", frame_path],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         got_frame = os.path.isfile(frame_path)
