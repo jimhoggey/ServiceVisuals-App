@@ -1055,6 +1055,39 @@ canvas {
   letter-spacing: 0.14em;
   color: var(--accent);
 }
+/* The drag/resize box over the card. Placed in percentages of the wrap
+   (which is exactly the image), so it needs no resize handling. The
+   outline is dashed light-on-dark so it shows on a white plate too. */
+.qr-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed rgba(232, 180, 79, 0.95);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  cursor: grab;
+  touch-action: none;   /* else a touch drag scrolls the page instead */
+}
+.qr-box.is-dragging { cursor: grabbing; }
+/* The QR preview stays in view beside the form: the card is placed and
+   sized from controls far down it (UX check: the grid and SIZE slider
+   moved a card that had scrolled off screen). Two-column layout only;
+   stacked, the preview is already on top. */
+@media (min-width: 941px) {
+  #view-qr .preview-pane { position: sticky; top: 84px; align-self: start; }
+}
+.qr-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  background: var(--accent);
+  border: 2px solid #0b0c0e;
+  border-radius: 3px;
+  touch-action: none;
+}
+.qr-h-nw { left: -7px; top: -7px; cursor: nwse-resize; }
+.qr-h-se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.qr-h-ne { right: -7px; top: -7px; cursor: nesw-resize; }
+.qr-h-sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
 .btn-refresh {
   padding: 6px 12px;
   font-size: 11px;

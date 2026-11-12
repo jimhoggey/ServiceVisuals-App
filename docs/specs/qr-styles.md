@@ -1,5 +1,9 @@
 # Spec: three QR card styles
 
+> **Superseded by `qr-card.md`** (2026-11-12): LIGHT became a background,
+> the styles are now squares / dots / rounded, and the text moved inside
+> the card. Kept for the history of the scannability rules.
+
 **Status:** shipped in v1.30.0. **Owner:** orchestrator. **Implementers:** backend
 Sonnet agent, frontend Sonnet agent (disjoint files, below). The backend
 used segno's `matrix_iter(verbose=True)` module types for the DOTS

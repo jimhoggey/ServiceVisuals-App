@@ -121,10 +121,10 @@ contain a file path). The full list of events lives in [`stats.py`](stats.py).
      model for a fraction of a cent per fill. An account with no credit
      falls back to `openrouter/free` automatically, which is free but slower.
    - **QR card**: a "scan to…" code from any website or plain text, with an
-     optional heading and caption, accent colour, a 9-way on-screen position,
-     and an optional background image, in a choice of three styles — Card
-     (a white card on your background), Light (a full-screen off-white
-     plate) or Dots (the card, with circular data modules). The preview
+     optional heading and caption inside one white card. Drag the card on
+     the preview to place it and drag a corner to resize it; pick square,
+     dot or rounded modules, and a dark, light or image background (with a
+     Dim slider for your image). The preview
      shows the real, scannable code (hit **Refresh** to regenerate) —
      perfect for giving, connect cards and signups. Export it as a clip
      (**EXPORT MP4**) or, since nothing in it moves, as a still

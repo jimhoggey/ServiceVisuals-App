@@ -1,10 +1,14 @@
 """QR "scan to..." card renderer.
 
-Builds a static base ONCE (background + white rounded card + crisp
-dark-on-white QR + accent heading + off-white caption), then per frame
+Builds a static base ONCE (background + one white rounded card holding the
+heading, the crisp dark-on-white QR and the caption), then per frame
 composites only a soft accent ring that gently breathes OUTSIDE the card.
 Everything that matters for a scan is static: the card, the QR, and the quiet
 zone never move or scale, so the code stays crisp and readable.
+
+The card is one contained unit (docs/specs/qr-card.md): the owner's heading
+used to float above it on the background, where a photo could swallow it.
+With no heading and no caption the card is just the square around the code.
 
 Scannability rules (non-negotiable — a code that won't scan is useless):
 
@@ -17,19 +21,20 @@ Scannability rules (non-negotiable — a code that won't scan is useless):
 - A quiet zone of QUIET (>=4) white modules surrounds the code.
 - Modules are crisp filled squares on exact integer boundaries (no
   anti-aliasing, no dark-module "dot gain" from overlapping rectangles).
-- The accent colour touches ONLY the heading text and the breathing ring.
-- Three `style`s share all of the above (docs/specs/qr-styles.md): `card`
-  (default, this docstring's description), `light` (an off-white plate,
-  no card, dark-on-light text) and `dots` (the card, but data modules are
-  filled circles — finder/alignment modules stay square so scanners can
-  still locate the code). Never light-on-dark, in any style.
+- The accent colour touches ONLY the breathing ring (gold text on the white
+  card would be unreadable; the text in the card is dark).
+- Three `style`s say how the code's modules are drawn: `squares` (default),
+  `dots` (filled circles) and `rounded` (soft squares). Finder/alignment
+  modules stay square in all three so scanners can still locate the code.
+  Never light-on-dark, in any style.
 
-Position: the whole heading+card+caption block can be anchored to a 3x3 grid
-(top-left ... bottom-right, default center), so the code can sit out of the
-way of other lower-thirds.
+Position and size: the card's centre sits at (`x`, `y`) as fractions of the
+frame, clamped so the card is always wholly on screen; `size` scales the
+whole card by scaling the module size, which stays a whole number of pixels
+and never drops below MODULE_MIN.
 
-Background: an uploaded image can replace the vignette; it is cover-fit to
-1080p and darkened with a scrim so the card and text stay legible.
+Background: the dark or light vignette plate (`backdrop`), or an uploaded
+image, cover-fit to 1080p and darkened only as far as `bg_dim` asks.
 
 Seamless loop: total_frames = duration * INPUT_FPS. The ring's opacity/width
 follow sin(phase), phase = 2*pi*frame/total_frames, so frame 0 == frame N
@@ -62,12 +67,15 @@ CARD_WHITE = "#ffffff"
 QR_DARK = "#0a0c0e"
 DEFAULT_ACCENT = "#e8b44f"
 
-# `light` style: an off-white plate instead of the dark vignette (docs/specs/
-# qr-styles.md). QR_DARK doubles as the plate's text colour — gold-on-white
-# would be unreadable, and dark-on-light keeps the style's own contrast rule.
+# The LIGHT backdrop: an off-white plate instead of the dark vignette. It
+# was a "style" until the owner pointed out it is a background ("it makes
+# the whole screen white"), so it now sits beside DARK and IMAGE.
 LIGHT_BASE = "#f4f2ee"
 LIGHT_EDGE = "#e6e3dc"
-LIGHT_CAPTION_ALPHA = 199        # ~78% — caption reads quieter than heading
+LIGHT_OUTLINE = "#d9d5cc"        # the white card's edge on the light plate
+# QR_DARK at 78 % over the white card, as a solid colour: the caption reads
+# quieter than the heading, and solid ink leaves the card's alpha alone.
+CAPTION_INK = "#404143"
 
 # ---------------------------------------------------------------- QR sizing
 
@@ -81,14 +89,22 @@ CARD_RADIUS = 40
 
 # ---------------------------------------------------------------- layout
 
-CENTER_X = WIDTH // 2
-MARGIN = 96                     # gap from frame edge for cornered positions
+EDGE = 40                       # the card stays this far inside the frame
 
+# Sizes at size 100; all scale with the card. The gaps are small because
+# the code's own quiet zone already puts 4 modules of white between the
+# text and the code.
 HEADING_SIZE = 76
 CAPTION_SIZE = 42
-HEADING_GAP = 42
-CAPTION_GAP = 38
+HEADING_GAP = 10
+CAPTION_GAP = 6
 HEADING_TRACKING = 6
+TEXT_MIN_SCALE = 0.7            # a long line shrinks this far, then the
+                                # card widens to hold it
+
+DEFAULT_SIZE = 100
+MIN_SIZE, MAX_SIZE = 50, 200    # percent; clamped again to scannable/frame
+MAX_BG_DIM = 80
 
 # Ring geometry (outside the card).
 RING_GAP = 24
@@ -109,18 +125,12 @@ MAX_URL_LEN = 1000
 MAX_HEADING_LEN = 30
 MAX_CAPTION_LEN = 60
 
-POSITIONS = (
-    "top-left", "top-center", "top-right",
-    "mid-left", "center", "mid-right",
-    "bottom-left", "bottom-center", "bottom-right",
-)
-DEFAULT_POSITION = "center"
-
-# Three dark-on-light looks (docs/specs/qr-styles.md) — never light-on-dark,
-# which fails on older scanners. "card" is the original look and must stay
-# the default so an old caller that never heard of `style` is unaffected.
-QR_STYLES = ("card", "light", "dots")
-DEFAULT_STYLE = "card"
+# How the code's modules are drawn (docs/specs/qr-card.md) — always dark on
+# the white card; light-on-dark fails on older scanners.
+QR_STYLES = ("squares", "dots", "rounded")
+DEFAULT_STYLE = "squares"
+QR_BACKDROPS = ("dark", "light")
+DEFAULT_BACKDROP = "dark"
 
 
 # ---------------------------------------------------------------- helpers
@@ -161,13 +171,24 @@ def _clean_options(options):
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(accent)):
         accent = DEFAULT_ACCENT
 
-    position = options.get("position", DEFAULT_POSITION)
-    if position not in POSITIONS:
-        position = DEFAULT_POSITION
+    def _number(key, default, lo, hi, cast):
+        try:
+            value = cast(options.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(lo, min(hi, value))
+
+    x = _number("x", 0.5, 0.0, 1.0, float)
+    y = _number("y", 0.5, 0.0, 1.0, float)
+    size = _number("size", DEFAULT_SIZE, MIN_SIZE, MAX_SIZE, int)
+    bg_dim = _number("bg_dim", 0, 0, MAX_BG_DIM, int)
 
     style = options.get("style", DEFAULT_STYLE)
     if style not in QR_STYLES:
         style = DEFAULT_STYLE
+    backdrop = options.get("backdrop", DEFAULT_BACKDROP)
+    if backdrop not in QR_BACKDROPS:
+        backdrop = DEFAULT_BACKDROP
 
     background = _resolve_background(options.get("background"))
 
@@ -184,7 +205,8 @@ def _clean_options(options):
 
     return {
         "url": url, "heading": heading, "caption": caption,
-        "accent": str(accent), "position": position, "style": style,
+        "accent": str(accent), "x": x, "y": y, "size": size,
+        "style": style, "backdrop": backdrop, "bg_dim": bg_dim,
         "background": background, "duration": duration, "ring": ring,
     }
 
@@ -212,9 +234,12 @@ def _vignette_background(base_hex=BG_BASE, edge_hex=BG_EDGE):
     return img.resize((WIDTH, HEIGHT), _BILINEAR)
 
 
-def _image_background(path):
-    """Cover-fit an uploaded image to 1080p and darken it with a scrim so the
-    white card and accent text stay legible on any photo."""
+def _image_background(path, dim):
+    """Cover-fit an uploaded image to 1080p, darkened by `dim` percent.
+
+    It used to be a fixed 48 % so the text above and below the card stayed
+    legible; the text is inside the card now, and the owner's image may be
+    finished artwork with a gap made for the code, so 0 leaves it alone."""
     try:
         img = Image.open(path).convert("RGB")
     except Exception:
@@ -226,19 +251,20 @@ def _image_background(path):
     x = (nw - WIDTH) // 2
     y = (nh - HEIGHT) // 2
     img = img.crop((x, y, x + WIDTH, y + HEIGHT))
-    # 48% black scrim for legibility.
+    if not dim:
+        return img
     scrim = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
-    return Image.blend(img, scrim, 0.48)
+    return Image.blend(img, scrim, dim / 100.0)
 
 
-def _build_background(background, style):
-    # `light` is a plain light plate for the code to sit on — an uploaded
-    # photo behind it would risk an unscannable, low-contrast quiet zone,
-    # so this style ignores `background` entirely (docs/specs/qr-styles.md).
-    if style == "light":
+def _build_background(opts):
+    # An uploaded image wins; the card carries its own white field and
+    # quiet zone, so any image behind it is safe for the scan.
+    if opts["background"]:
+        return _image_background(opts["background"], opts["bg_dim"])
+    if opts["backdrop"] == "light":
         return _vignette_background(LIGHT_BASE, LIGHT_EDGE)
-    return _image_background(background) if background \
-        else _vignette_background()
+    return _vignette_background()
 
 
 def _qr_matrix(url):
@@ -274,53 +300,138 @@ def _module_px(n):
     return max(MODULE_MIN, min(MODULE_TARGET, int(fit)))
 
 
-def _build_card(matrix, n, style, qr):
-    """Card (RGBA) with the QR drawn crisp and centered. Returns
-    (card_image, card_size).
-
-    `card` (unchanged from before this feature) and `dots` get a white
-    rounded card; `light` skips that fill and stays transparent so the
-    plate built by `_build_background` shows through — the quiet zone
-    ends up plate-coloured, which is fine, since the plate is light.
-    `dots` draws each data module as a filled circle; finder and
-    alignment modules stay square (see `_dots_square_mask`).
-    """
-    module_px = _module_px(n)
-    code_px = module_px * n
-    inner = code_px + 2 * QUIET * module_px    # code + quiet zone
-    card_size = inner + 2 * CARD_PAD
-
-    card = Image.new("RGBA", (card_size, card_size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(card)
-    if style != "light":
-        draw.rounded_rectangle(
-            [0, 0, card_size - 1, card_size - 1], radius=CARD_RADIUS,
-            fill=_hex_rgb(CARD_WHITE) + (255,))
-
-    origin = (card_size - code_px) // 2        # exact-centered code block
-    dark = _hex_rgb(QR_DARK)
-    square_mask = _dots_square_mask(qr, n) if style == "dots" else None
-    for r in range(n):
-        y0 = origin + r * module_px
-        for c in range(n):
-            if matrix[r][c]:
-                x0 = origin + c * module_px
-                # Exact cell: [x0 .. x0+module_px-1] fills module_px pixels with
-                # no overlap into the next cell, so dark and light modules are
-                # the same size (no dot gain that would fail a marginal scan).
-                box = [x0, y0, x0 + module_px - 1, y0 + module_px - 1]
-                if style == "dots" and not square_mask[r][c]:
-                    draw.ellipse(box, fill=dark)
-                else:
-                    draw.rectangle(box, fill=dark)
-    return card, card_size
-
-
 def _text_width(font, text, tracking):
     if not text:
         return 0
     return int(sum(font.getlength(ch) for ch in text)
                + tracking * (len(text) - 1))
+
+
+def _fit_line(kind, text, size, tracking, room):
+    """(font, tracking, width, height) for one line of card text at `size`,
+    shrunk toward TEXT_MIN_SCALE if it is wider than `room` -- a long
+    heading gets smaller before the card has to get wider."""
+    font = fonts.load(kind, max(8, int(round(size))))
+    width = _text_width(font, text, tracking)
+    if width > room:
+        scale = max(TEXT_MIN_SCALE, room / float(width))
+        tracking = tracking * scale
+        font = fonts.load(kind, max(8, int(size * scale)))
+        width = _text_width(font, text, tracking)
+    box = font.getbbox(text)
+    return font, tracking, width, box[3] - box[1]
+
+
+def _card_geometry(opts, n, module_px):
+    """Sizes of the card and where its three parts sit inside it, for a
+    given module size. Everything scales with f = module_px / the default
+    module size, so a resized card is the same card, bigger or smaller.
+
+    Stack: pad, heading, code with its quiet zone, caption, pad. A missing
+    line takes its gap with it, so with no text this is exactly the old
+    square card."""
+    f = module_px / float(_module_px(n))
+    pad = int(round(CARD_PAD * f))
+    code_px = module_px * n
+    inner = code_px + 2 * QUIET * module_px    # code + quiet zone
+
+    heading = opts["heading"].upper()
+    caption = opts["caption"]
+    geo = {"module_px": module_px, "code_px": code_px, "f": f,
+           "radius": int(round(CARD_RADIUS * f)),
+           "heading": heading, "caption": caption,
+           "heading_font": None, "caption_font": None}
+    text_w = 0
+    y = pad
+    if heading:
+        font, tracking, width, height = _fit_line(
+            "label", heading, HEADING_SIZE * f, HEADING_TRACKING * f, inner)
+        geo.update(heading_font=font, heading_tracking=tracking,
+                   heading_top=y)
+        text_w = max(text_w, width)
+        y += height + int(round(HEADING_GAP * f))
+    geo["inner_top"] = y
+    y += inner
+    if caption:
+        font, tracking, width, height = _fit_line(
+            "caption", caption, CAPTION_SIZE * f, 0, inner)
+        y += int(round(CAPTION_GAP * f))
+        geo.update(caption_font=font, caption_top=y)
+        text_w = max(text_w, width)
+        y += height
+    geo["width"] = max(inner, text_w) + 2 * pad
+    geo["height"] = y + pad
+    geo["inner_left"] = (geo["width"] - inner) // 2
+    return geo
+
+
+def _pick_module_px(opts, n):
+    """The module size for the asked `size`: whole pixels, never below
+    MODULE_MIN (a code that won't scan is useless), and no bigger than
+    still fits the frame with EDGE to spare."""
+    px = max(MODULE_MIN,
+             int(round(_module_px(n) * opts["size"] / 100.0)))
+    while px > MODULE_MIN:
+        geo = _card_geometry(opts, n, px)
+        if geo["width"] <= WIDTH - 2 * EDGE and \
+                geo["height"] <= HEIGHT - 2 * EDGE:
+            break
+        px -= 1
+    return px
+
+
+def _build_card(matrix, n, qr, opts, geo):
+    """The card (RGBA): white rounded rectangle, heading, crisp QR, caption.
+
+    `dots` draws each data module as a filled circle and `rounded` as a
+    soft square; finder and alignment modules stay square in every style
+    (see `_dots_square_mask`)."""
+    style = opts["style"]
+    module_px = geo["module_px"]
+    width, height = geo["width"], geo["height"]
+
+    card = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(card)
+    # On the light plate a white card has no edge of its own once the ring
+    # is off, so it gets a quiet outline there.
+    on_light = opts["backdrop"] == "light" and not opts["background"]
+    draw.rounded_rectangle(
+        [0, 0, width - 1, height - 1], radius=geo["radius"],
+        fill=_hex_rgb(CARD_WHITE) + (255,),
+        outline=(_hex_rgb(LIGHT_OUTLINE) + (255,)) if on_light else None,
+        width=2 if on_light else 0)
+
+    if geo["heading_font"] is not None:
+        _draw_tracked_text(
+            draw, width / 2.0, geo["heading_top"], geo["heading"],
+            geo["heading_font"], _hex_rgb(QR_DARK) + (255,),
+            geo["heading_tracking"])
+    if geo["caption_font"] is not None:
+        _draw_tracked_text(
+            draw, width / 2.0, geo["caption_top"], geo["caption"],
+            geo["caption_font"], _hex_rgb(CAPTION_INK) + (255,), 0)
+
+    left = geo["inner_left"] + QUIET * module_px
+    top = geo["inner_top"] + QUIET * module_px
+    dark = _hex_rgb(QR_DARK)
+    square_mask = None if style == "squares" else _dots_square_mask(qr, n)
+    soft = max(1, int(module_px * 0.32))
+    for r in range(n):
+        y0 = top + r * module_px
+        for c in range(n):
+            if matrix[r][c]:
+                x0 = left + c * module_px
+                # Exact cell: [x0 .. x0+module_px-1] fills module_px pixels with
+                # no overlap into the next cell, so dark and light modules are
+                # the same size (no dot gain that would fail a marginal scan).
+                box = [x0, y0, x0 + module_px - 1, y0 + module_px - 1]
+                if square_mask is None or square_mask[r][c]:
+                    draw.rectangle(box, fill=dark)
+                elif style == "dots":
+                    draw.ellipse(box, fill=dark)
+                else:
+                    draw.rounded_rectangle(box, radius=soft, fill=dark)
+    return card
 
 
 def _draw_tracked_text(draw, cx, top, text, font, fill, tracking):
@@ -334,98 +445,30 @@ def _draw_tracked_text(draw, cx, top, text, font, fill, tracking):
         x += font.getlength(ch) + tracking
 
 
-def _layout(opts, card_size):
-    """Compute geometry for the heading+card+caption block at the chosen
-    position. Returns dict with card_cx, card_top, heading_top, caption_top."""
-    heading = opts["heading"].upper()
-    caption = opts["caption"]
-    heading_font = fonts.load("label", HEADING_SIZE) if heading else None
-    caption_font = fonts.load("caption", CAPTION_SIZE) if caption else None
-
-    heading_h = 0
-    if heading_font is not None:
-        hb = heading_font.getbbox(heading)
-        heading_h = hb[3] - hb[1]
-    caption_h = 0
-    if caption_font is not None:
-        cb = caption_font.getbbox(caption)
-        caption_h = cb[3] - cb[1]
-
-    block_h = card_size
-    if heading_h:
-        block_h += heading_h + HEADING_GAP
-    if caption_h:
-        block_h += caption_h + CAPTION_GAP
-
-    pos = opts["position"]
-    vert, horiz = pos.split("-") if "-" in pos else ("mid", "center")
-
-    # Horizontal: card center x.
-    half = card_size // 2
-    if horiz == "left":
-        card_cx = MARGIN + half
-    elif horiz == "right":
-        card_cx = WIDTH - MARGIN - half
-    else:
-        card_cx = CENTER_X
-
-    # Vertical: top of the whole block.
-    if vert == "top":
-        block_top = MARGIN
-    elif vert == "bottom":
-        block_top = HEIGHT - MARGIN - block_h
-    else:
-        block_top = (HEIGHT - block_h) // 2
-
-    y = block_top
-    heading_top = None
-    if heading_h:
-        heading_top = y
-        y += heading_h + HEADING_GAP
-    card_top = y
-    y += card_size
-    caption_top = (y + CAPTION_GAP) if caption_h else None
-
-    return {
-        "card_cx": card_cx, "card_top": card_top, "card_size": card_size,
-        "heading_top": heading_top, "caption_top": caption_top,
-        "heading_font": heading_font, "caption_font": caption_font,
-        "heading": heading, "caption": caption,
-    }
+def _place(centre01, span, frame):
+    """Left/top of a `span`-long card centred at `centre01` of `frame`,
+    moved in just far enough to stay EDGE inside it -- wherever the card
+    is dragged, all of it is on screen. (A code too big for the frame even
+    at MODULE_MIN is centred; nothing better can be done with it.)"""
+    lo, hi = EDGE, frame - EDGE - span
+    if hi < lo:
+        return (frame - span) // 2
+    return max(lo, min(hi, int(round(centre01 * frame - span / 2.0))))
 
 
 def _compose_base(opts):
-    """Build the static base frame (RGB) and return (base_rgb, geometry)."""
-    style = opts["style"]
+    """Build the static base frame (RGB) and return (base_rgb, geometry).
+    geometry gains the card's `left`/`top` in the frame and the `size`
+    (percent) actually used, which can differ from the one asked for."""
     matrix, n, qr = _qr_matrix(opts["url"])
-    card, card_size = _build_card(matrix, n, style, qr)
-    geo = _layout(opts, card_size)
+    geo = _card_geometry(opts, n, _pick_module_px(opts, n))
+    card = _build_card(matrix, n, qr, opts, geo)
+    geo["left"] = _place(opts["x"], geo["width"], WIDTH)
+    geo["top"] = _place(opts["y"], geo["height"], HEIGHT)
+    geo["size"] = int(round(100 * geo["f"]))
 
-    base = _build_background(opts["background"], style).convert("RGBA")
-    draw = ImageDraw.Draw(base)
-    accent = opts["accent"]
-
-    # `light` sits on a light plate: gold-on-white would be unreadable, so
-    # both heading and caption switch to QR_DARK (caption stays quieter via
-    # alpha, same as TEXT_LIGHT-on-dark does for the other two styles).
-    if style == "light":
-        heading_fill = _hex_rgb(QR_DARK) + (255,)
-        caption_fill = _hex_rgb(QR_DARK) + (LIGHT_CAPTION_ALPHA,)
-    else:
-        heading_fill = _hex_rgb(accent) + (255,)
-        caption_fill = _hex_rgb(TEXT_LIGHT) + (255,)
-
-    if geo["heading_font"] is not None:
-        _draw_tracked_text(
-            draw, geo["card_cx"], geo["heading_top"], geo["heading"],
-            geo["heading_font"], heading_fill, HEADING_TRACKING)
-    if geo["caption_font"] is not None:
-        _draw_tracked_text(
-            draw, geo["card_cx"], geo["caption_top"], geo["caption"],
-            geo["caption_font"], caption_fill, 0)
-
-    base.alpha_composite(card, (geo["card_cx"] - card_size // 2,
-                                geo["card_top"]))
+    base = _build_background(opts).convert("RGBA")
+    base.alpha_composite(card, (geo["left"], geo["top"]))
     return base.convert("RGB"), geo
 
 
@@ -439,24 +482,27 @@ RING_STEPS = 64
 RING_PAD = RING_GAP + int(math.ceil(RING_BASE_W + RING_SWING_W)) + 2
 
 
-def _ring_tile(card_size, step, accent):
+def _ring_tile(geo, step, accent):
     """RGBA tile of the ring for a quantised breathe `step`. Paste it at
     (card_left - RING_PAD, card_top - RING_PAD)."""
     s = step / float(RING_STEPS - 1)
     alpha = int(round(RING_MIN_A + (RING_MAX_A - RING_MIN_A) * s))
     width = RING_BASE_W + RING_SWING_W * s
 
-    box = card_size + 2 * RING_PAD
-    tile = Image.new("RGBA", (box * RING_SS, box * RING_SS), (0, 0, 0, 0))
+    box_w = geo["width"] + 2 * RING_PAD
+    box_h = geo["height"] + 2 * RING_PAD
+    tile = Image.new("RGBA", (box_w * RING_SS, box_h * RING_SS),
+                     (0, 0, 0, 0))
     draw = ImageDraw.Draw(tile)
 
     inset = (RING_PAD - RING_GAP) * RING_SS
-    far = (box - (RING_PAD - RING_GAP)) * RING_SS - 1
     draw.rounded_rectangle(
-        [inset, inset, far, far], radius=(CARD_RADIUS + RING_GAP) * RING_SS,
+        [inset, inset, (box_w - (RING_PAD - RING_GAP)) * RING_SS - 1,
+         (box_h - (RING_PAD - RING_GAP)) * RING_SS - 1],
+        radius=(geo["radius"] + RING_GAP) * RING_SS,
         outline=_hex_rgb(accent) + (alpha,),
         width=max(1, int(round(width * RING_SS))))
-    return tile.resize((box, box), _LANCZOS)
+    return tile.resize((box_w, box_h), _LANCZOS)
 
 
 def _ring_step(phase):
@@ -468,24 +514,32 @@ def _ring_step(phase):
 # ---------------------------------------------------------------- renderer
 
 def _ring_pos(geo):
-    return (geo["card_cx"] - geo["card_size"] // 2 - RING_PAD,
-            geo["card_top"] - RING_PAD)
+    return (geo["left"] - RING_PAD, geo["top"] - RING_PAD)
 
 
-def render_qr_still(options, max_width=900):
-    """Render ONE representative frame (base + ring near peak) as an RGB PIL
-    image, downscaled to max_width. Used by the live preview endpoint so the
-    preview shows the exact, scannable QR that will be exported."""
+def render_qr_preview(options, max_width=900):
+    """One representative frame (base + ring near peak) as an RGB PIL image,
+    downscaled to max_width, plus where the card is: (frame, box, size).
+    `box` is (left, top, width, height) in the full 1920x1080 frame and
+    `size` the percent actually used -- the preview draws its drag/resize
+    box from them, so a size the renderer clamped is seen, not silent."""
     opts = _clean_options(options)
     base_rgb, geo = _compose_base(opts)
     frame = base_rgb.copy()
     if opts["ring"]:
-        tile = _ring_tile(geo["card_size"], RING_STEPS - 1, opts["accent"])
+        tile = _ring_tile(geo, RING_STEPS - 1, opts["accent"])
         frame.paste(tile, _ring_pos(geo), tile)
     if max_width and max_width < WIDTH:
         h = int(HEIGHT * max_width / WIDTH)
         frame = frame.resize((max_width, h), _LANCZOS)
-    return frame
+    box = (geo["left"], geo["top"], geo["width"], geo["height"])
+    return frame, box, geo["size"]
+
+
+def render_qr_still(options, max_width=900):
+    """The preview frame alone: the exact, scannable QR that will be
+    exported."""
+    return render_qr_preview(options, max_width)[0]
 
 
 def render_qr_image(options):
@@ -524,8 +578,7 @@ def render_qr(options, progress_cb):
             step = _ring_step(2.0 * math.pi * k / total_frames)
             tile = tiles.get(step)
             if tile is None:
-                tile = tiles[step] = _ring_tile(
-                    geo["card_size"], step, opts["accent"])
+                tile = tiles[step] = _ring_tile(geo, step, opts["accent"])
             frame = base_rgb.copy()
             frame.paste(tile, pos, tile)
             enc.add_frame(frame)

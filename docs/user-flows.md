@@ -585,6 +585,53 @@ credit" is never an error they see.
   about a fraction of a cent per fill. It now says the key is free to
   create, and that Fill with AI still works with no credit.
 
+## QR tile
+
+The operator's model (spec: `docs/specs/qr-card.md`): "a QR code on a
+card that I put somewhere on the screen." The card is one unit — heading,
+code, caption inside one white border — that is dragged on the preview
+and resized by its corners. Two separate choices: how the code looks
+(SQUARES / DOTS / ROUNDED) and what is behind the card (DARK / LIGHT /
+IMAGE). Their own image is finished artwork, possibly with a gap made
+for the code, so it is not darkened unless they move Dim.
+
+**Found and fixed** (unreleased, after v1.46.0)
+- The owner: "when I click light, this is more of a background because it
+  makes the whole screen white. And dots is a QR code style." LIGHT sat
+  in the Style control beside CARD and DOTS — it is now a Background,
+  and the styles are only about the code.
+- The heading floated above the card and the caption below it, on the
+  background, where a photo swallowed them ("I want the text to be inside
+  the white border ... one contained unit"). Both are inside the card
+  now; with no text the card shrinks to the code.
+- Position was nine fixed spots. The card is now dragged anywhere on the
+  preview (always wholly on screen) and resized by a corner or the SIZE
+  slider; the grid stays as nine quick snaps.
+- A background image was always darkened 48 %. Now a Dim slider, 0 by
+  default ("it could be that I made a screen with the hole for a QR code").
+- UX check: the preview scrolled away while using the grid and SIZE
+  slider — it is sticky beside the form now.
+- UX check: SIZE quietly snapped from 200 % to 131 % and read as broken —
+  a line under it says "That's the biggest that fits on screen." (or the
+  smallest a phone can still scan).
+- UX check: resizing scaled about the centre, moving the corner you
+  weren't holding — the opposite corner is pinned now.
+- UX check: a card dragged into a corner lit no grid cell — a card
+  sitting at a snap lights it.
+- UX check: grey "SCAN TO GIVE" placeholder read as a real heading on an
+  empty card — placeholders now start "e.g.".
+- UX check: Dim was live with no image chosen — disabled until one is.
+
+**Found, not yet fixed**
+- While a corner is dragged, the dashed box leads and the card catches
+  up a moment later (each step is a real render).
+- A long caption on the smallest card is too small to read from a seat.
+
+Rules for every screen, from this round: when a control is clamped to a
+limit, say why in plain words next to it; the preview stays visible while
+the controls that change it are used; a placeholder never reads as a
+real value.
+
 ## How to use and update this file
 
 1. **Before** changing a screen: read its section and the rules above.

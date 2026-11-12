@@ -1111,110 +1111,145 @@ def check_alpha_export():
 
 
 def check_qr_styles():
-    """docs/specs/qr-styles.md: style validation, plus one pixel check per
-    non-card style proving the plate/dots actually differ from `card` in
-    the rendered frame. A still (render_qr_still) is the same composition
-    the video encodes, so this covers the visual contract without a
-    render+ffmpeg round trip — `card`'s own video path is unchanged and
-    stays covered by verify() in main().
-    """
+    """docs/specs/qr-card.md: the card is one unit (text inside, shrinks to
+    the code with none), three code styles, dark/light/image backgrounds
+    with a dim, and a place and size that always stay on screen and
+    scannable. Stills at full size: the same composition the video
+    encodes, without a render+ffmpeg round trip."""
     import validation
-    from render.qr import (WIDTH, _build_card, _clean_options,
-                            _dots_square_mask, _layout, _module_px,
-                            _qr_matrix, render_qr_still)
+    from PIL import Image
+    from render import qr as qr_mod
+    from render.encoder import UPLOADS_DIR
 
-    print("QR: style validation + per-style pixel checks")
+    print("QR: one card, styles, backgrounds, place and size")
 
     base = {"url": "https://example.org", "heading": "GIVE",
             "caption": "Thanks"}
 
     clean = validation.validate_qr_options(base)
-    check("style absent defaults to card",
-          clean.get("style") == "card", "got {0!r}".format(clean))
+    check("defaults: squares on dark, centred, size 100, no dim",
+          (clean["style"], clean["backdrop"], clean["x"], clean["y"],
+           clean["size"], clean["bg_dim"])
+          == ("squares", "dark", 0.5, 0.5, 100, 0), repr(clean))
+    for key, value in (("style", "dots"), ("style", "rounded"),
+                       ("backdrop", "light"), ("size", 50), ("size", 200),
+                       ("x", 0), ("y", 1), ("bg_dim", 80)):
+        clean = validation.validate_qr_options(dict(base, **{key: value}))
+        check("{0}={1!r} is accepted".format(key, value),
+              clean[key] == value, repr(clean))
+    for key, value, message in (
+            ("style", "card", "That QR style is not valid."),
+            ("backdrop", "neon", "That QR background is not valid."),
+            ("x", 1.5, "Position must be a number from 0 to 1."),
+            ("y", "0.5", "Position must be a number from 0 to 1."),
+            ("size", 49, "Size must be a whole number between 50 and 200."),
+            ("bg_dim", 81, "Dim must be a whole number between 0 and 80.")):
+        try:
+            validation.validate_qr_options(dict(base, **{key: value}))
+            check("{0}={1!r} is refused".format(key, value), False,
+                  "no error raised")
+        except validation.ValidationError as exc:
+            check("{0}={1!r} is refused: {2}".format(key, value, message),
+                  str(exc) == message, str(exc))
 
-    for style in ("light", "dots"):
-        clean = validation.validate_qr_options(dict(base, style=style))
-        check("style={0!r} is accepted".format(style),
-              clean.get("style") == style, "got {0!r}".format(clean))
+    def still(**over):
+        return qr_mod.render_qr_preview(dict(base, **over), max_width=0)
 
+    # The owner: "I want the text to be inside the white border ... one
+    # contained unit", and with no text the border shrinks to the code.
+    frame, (left, top, w, h), size = still()
+    _f, (bl, bt, bw, bh), _s = still(heading="", caption="")
+    check("no text: the card is the square around the code", bw == bh,
+          "{0}x{1}".format(bw, bh))
+    check("text makes the card taller, not the code smaller",
+          h > bh and w == bw, "{0}x{1} vs {2}x{3}".format(w, h, bw, bh))
+    heading_band = frame.crop((left + 40, top + 30, left + w - 40,
+                               top + 110)).convert("L")
+    check("the heading is dark ink on the white card",
+          min(heading_band.getdata()) < 60 and
+          max(heading_band.getdata()) > 240,
+          repr(heading_band.getextrema()))
+    outside = frame.crop((0, 0, 1920, top - 40)).convert("L")
+    check("nothing is drawn above the card", max(outside.getdata()) < 60,
+          repr(outside.getextrema()))
+    check("a centred card reports its box and size 100",
+          abs(left + w / 2.0 - 960) <= 1 and abs(top + h / 2.0 - 540) <= 1
+          and size == 100, repr((left, top, w, h, size)))
+
+    # "wherever the user drags the QR code, it is on screen."
+    for x, y in ((0, 0), (1, 1), (0, 1), (1, 0)):
+        _f, (cl, ct, cw, ch), _s = still(x=x, y=y)
+        check("dragged to corner ({0}, {1}) the card stays on screen"
+              .format(x, y),
+              cl >= qr_mod.EDGE and ct >= qr_mod.EDGE and
+              cl + cw <= 1920 - qr_mod.EDGE and
+              ct + ch <= 1080 - qr_mod.EDGE, repr((cl, ct, cw, ch)))
+
+    # Size: whole-pixel modules, never below scannable, never past the
+    # frame -- and the size really used comes back so the UI can show it.
+    _f, (_l, _t, sw, sh), small = still(size=50)
+    _f, (_l, _t, gw, gh), big = still(size=200)
+    check("size 50 is smaller, size 200 bigger, and both fit the frame",
+          sw < w < gw and gh <= 1080 - 2 * qr_mod.EDGE,
+          repr((sw, w, gw, gh)))
+    opts = qr_mod._clean_options(dict(base, size=50))
+    _m, n, _q = qr_mod._qr_matrix(opts["url"])
+    check("modules never go below {0} px".format(qr_mod.MODULE_MIN),
+          qr_mod._pick_module_px(opts, n) >= qr_mod.MODULE_MIN)
+    check("a clamped size is reported, not the one asked for",
+          50 < small < 100 < big < 200, "{0} {1}".format(small, big))
+
+    # Backgrounds: light is a background, not a style; an image is left
+    # alone at dim 0 (it may be finished artwork with a gap for the code).
+    check("dark backdrop: the corner is dark",
+          max(frame.getpixel((5, 5))) <= 40, repr(frame.getpixel((5, 5))))
+    light, _b, _s = still(backdrop="light")
+    check("light backdrop: the corner is light, the card still there",
+          min(light.getpixel((5, 5))) >= 200 and
+          light.getpixel((left + w // 2, top + 20)) == (255, 255, 255),
+          repr(light.getpixel((5, 5))))
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    bg_name = "smoke-qr-bg.png"
+    bg_path = os.path.join(UPLOADS_DIR, bg_name)
+    Image.new("RGB", (1920, 1080), (200, 40, 40)).save(bg_path)
     try:
-        validation.validate_qr_options(dict(base, style="neon"))
-        check('style="neon" is rejected', False, "no error raised")
-    except validation.ValidationError as exc:
-        check('style="neon" is rejected with the exact message',
-              str(exc) == "That QR style is not valid.",
-              "got {0!r}".format(str(exc)))
+        plain, _b, _s = still(background=bg_name)
+        dimmed, _b, _s = still(background=bg_name, bg_dim=50)
+        check("an image at dim 0 is untouched",
+              plain.getpixel((5, 5)) == (200, 40, 40),
+              repr(plain.getpixel((5, 5))))
+        check("dim 50 halves it", dimmed.getpixel((5, 5)) == (100, 20, 20),
+              repr(dimmed.getpixel((5, 5))))
+    finally:
+        os.unlink(bg_path)
 
-    # (b) `light` is a light plate, `card` the dark vignette — pixel
-    # (5, 5) sits on the background corner, far from the centered card,
-    # for either style.
-    card_frame = render_qr_still(
-        _clean_options(dict(base, style="card")), max_width=900)
-    r, g, b = card_frame.getpixel((5, 5))
-    check("card: pixel (5, 5) is dark (every channel <= 40)",
-          r <= 40 and g <= 40 and b <= 40,
-          "got ({0}, {1}, {2})".format(r, g, b))
-
-    light_frame = render_qr_still(
-        _clean_options(dict(base, style="light")), max_width=900)
-    r, g, b = light_frame.getpixel((5, 5))
-    check("light: pixel (5, 5) is light (every channel >= 200)",
-          r >= 200 and g >= 200 and b >= 200,
-          "got ({0}, {1}, {2})".format(r, g, b))
-
-    # (c) `dots`: a dark module that is neither finder nor alignment
-    # pattern renders as a filled circle — centre dark, corner (outside
-    # the inscribed circle) light. Geometry comes from the renderer's own
-    # helpers (module_px, card layout), never a hard-coded pixel offset,
-    # so this keeps working if sizing constants ever change.
-    dots_opts = _clean_options(dict(base, style="dots"))
-    matrix, n, qr = _qr_matrix(dots_opts["url"])
-    module_px = _module_px(n)
-    square = _dots_square_mask(qr, n)
-
-    cell = None
-    if matrix[9][9] and not square[9][9]:
-        cell = (9, 9)
-    else:
-        for rr in range(n):
-            for cc in range(n):
-                if matrix[rr][cc] and not square[rr][cc]:
-                    cell = (rr, cc)
-                    break
-            if cell:
-                break
-    check("a dark, non-finder/alignment cell exists to sample",
-          cell is not None, "matrix has none (n={0})".format(n))
-
-    if cell is not None:
-        r_i, c_i = cell
-        card_img, card_size = _build_card(matrix, n, "dots", qr)
-        geo = _layout(dots_opts, card_size)
-        code_px = module_px * n
-        origin = (card_size - code_px) // 2
-        card_left = geo["card_cx"] - card_size // 2
-        card_top = geo["card_top"]
-
-        x0 = card_left + origin + c_i * module_px
-        y0 = card_top + origin + r_i * module_px
-        cx = x0 + module_px // 2
-        cy = y0 + module_px // 2
-
-        # render_qr_still scales the 1920-wide frame down to max_width —
-        # scale the sample points the same way rather than re-rendering
-        # at full size.
-        ratio = 900.0 / WIDTH
-        dots_frame = render_qr_still(dots_opts, max_width=900)
-        center_px = dots_frame.getpixel(
-            (int(round(cx * ratio)), int(round(cy * ratio))))
-        corner_px = dots_frame.getpixel(
-            (int(round(x0 * ratio)), int(round(y0 * ratio))))
-        check("dots: sampled cell's centre pixel is dark",
-              all(ch <= 40 for ch in center_px[:3]),
-              "got {0!r}".format(center_px))
-        check("dots: sampled cell's top-left corner pixel is light",
-              all(ch >= 200 for ch in corner_px[:3]),
-              "got {0!r}".format(corner_px))
+    # Code styles: a data module is a circle (dots) or a soft square
+    # (rounded) -- its corner pixel white -- while finder modules stay
+    # square in every style, so a scanner can still find the code.
+    opts = qr_mod._clean_options(dict(base, ring=False))
+    matrix, n, qr = qr_mod._qr_matrix(opts["url"])
+    square = qr_mod._dots_square_mask(qr, n)
+    _b, geo = qr_mod._compose_base(opts)
+    px = geo["module_px"]
+    code_left = geo["left"] + geo["inner_left"] + qr_mod.QUIET * px
+    code_top = geo["top"] + geo["inner_top"] + qr_mod.QUIET * px
+    cell = next((r_i, c_i) for r_i in range(n) for c_i in range(n)
+                if matrix[r_i][c_i] and not square[r_i][c_i])
+    cx0 = code_left + cell[1] * px
+    cy0 = code_top + cell[0] * px
+    for style, corner_white in (("squares", False), ("dots", True),
+                                ("rounded", True)):
+        img, _b, _s = still(style=style, ring=False)
+        centre = img.getpixel((cx0 + px // 2, cy0 + px // 2))
+        corner = img.getpixel((cx0, cy0))
+        check("{0}: a data module's centre is dark, its corner {1}"
+              .format(style, "white" if corner_white else "dark"),
+              max(centre) <= 40 and
+              (min(corner) >= 200) == corner_white,
+              "{0!r} {1!r}".format(centre, corner))
+        check("{0}: the finder pattern's corner stays square".format(style),
+              max(img.getpixel((code_left, code_top))) <= 40,
+              repr(img.getpixel((code_left, code_top))))
 
 
 def check_boot_marker_is_packaged_only():
@@ -1667,7 +1702,7 @@ def check_stats_privacy():
     check("motionbg props clamp",
           _app._motionbg_props({"style": "secret"}) == {"style": "aurora"})
     check("qr props clamp",
-          _app._qr_props({"style": "neon"}) == {"style": "card"})
+          _app._qr_props({"style": "neon"}) == {"style": "squares"})
 
     # Never sends when not asked to: no worker, no queue growth.
     before = stats._q.qsize()

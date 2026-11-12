@@ -29,6 +29,14 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.47.0": [
+        "QR card: the heading and caption now sit inside the white card.",
+        "Drag the QR card anywhere on the preview, and drag a corner to "
+        "resize it.",
+        "Pick square, dot or rounded codes, and a dark, light or image "
+        "background.",
+        "Your background image is no longer darkened unless you move Dim.",
+    ],
     "1.46.0": [
         "Spinner: Cinematic zoom pushes in on the arrow and ticks past the "
         "last names. Set its time under ZOOM.",

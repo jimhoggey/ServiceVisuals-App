@@ -12,7 +12,7 @@ import re
 from urllib.parse import urlsplit
 
 from render.encoder import ALPHA_FORMATS, UPLOADS_DIR
-from render.qr import POSITIONS, QR_STYLES
+from render.qr import QR_BACKDROPS, QR_STYLES
 import beatsound
 from render import beat
 from render.timer import CLOCK_STYLES, parse_countdown_format
@@ -600,13 +600,27 @@ def validate_qr_options(options):
     duration = _int_field(
         options, "duration_seconds", 5, 60, 15, "Duration (seconds)")
 
-    position = options.get("position", "center")
-    if not isinstance(position, str) or position not in POSITIONS:
-        raise ValidationError("That QR position is not valid.")
+    # docs/specs/qr-card.md: the card is dragged and resized on the
+    # preview, so its place is a centre (fractions of the frame) and a
+    # size in percent; the renderer keeps it on screen and scannable.
+    placed = {}
+    for key in ("x", "y"):
+        value = options.get(key, 0.5)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not 0 <= value <= 1:
+            raise ValidationError("Position must be a number from 0 to 1.")
+        placed[key] = float(value)
+    size = _int_field(options, "size", 50, 200, 100, "Size")
 
-    style = options.get("style", "card")
+    style = options.get("style", "squares")
     if not isinstance(style, str) or style not in QR_STYLES:
         raise ValidationError("That QR style is not valid.")
+    backdrop = options.get("backdrop", "dark")
+    if not isinstance(backdrop, str) or backdrop not in QR_BACKDROPS:
+        raise ValidationError("That QR background is not valid.")
+    # 0 by default, like the timer's: an uploaded image is finished
+    # artwork until the operator says otherwise.
+    bg_dim = _int_field(options, "bg_dim", 0, 80, 0, "Dim")
 
     ring = options.get("ring", True)
     if not isinstance(ring, bool):
@@ -618,8 +632,12 @@ def validate_qr_options(options):
         "caption": caption,
         "accent": _accent_field(options),
         "duration_seconds": duration,
-        "position": position,
+        "x": placed["x"],
+        "y": placed["y"],
+        "size": size,
         "style": style,
+        "backdrop": backdrop,
+        "bg_dim": bg_dim,
         "ring": ring,
         "background": _background_field(options),
     }

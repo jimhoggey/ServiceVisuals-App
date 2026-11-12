@@ -935,46 +935,107 @@
           </fieldset>
 
           <fieldset class="group">
-            <legend>Style</legend>
+            <legend>Text</legend>
+            <div class="num-field num-field-wide">
+              <label for="qr-heading">HEADING (OPTIONAL)</label>
+              <input type="text" id="qr-heading" spellcheck="false" autocomplete="off"
+                maxlength="30" placeholder="e.g. Scan to give">
+            </div>
+            <div class="num-field num-field-wide">
+              <label for="qr-caption">CAPTION (OPTIONAL)</label>
+              <input type="text" id="qr-caption" spellcheck="false" autocomplete="off"
+                maxlength="60" placeholder="e.g. Thank you">
+            </div>
+            <p class="hint">Heading up to 30 characters, caption up to 60. Both sit inside the white card.</p>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Code style</legend>
             <div class="seg-group">
               <label class="seg">
-                <input class="vh" type="radio" name="qr-style" id="qr-style-card" value="card" checked>
-                <span>CARD</span>
-              </label>
-              <label class="seg">
-                <input class="vh" type="radio" name="qr-style" id="qr-style-light" value="light">
-                <span>LIGHT</span>
+                <input class="vh" type="radio" name="qr-style" id="qr-style-squares" value="squares" checked>
+                <span>SQUARES</span>
               </label>
               <label class="seg">
                 <input class="vh" type="radio" name="qr-style" id="qr-style-dots" value="dots">
                 <span>DOTS</span>
               </label>
+              <label class="seg">
+                <input class="vh" type="radio" name="qr-style" id="qr-style-rounded" value="rounded">
+                <span>ROUNDED</span>
+              </label>
             </div>
-            <p class="hint">Card and dots sit on your background; light fills the whole screen.</p>
+            <p class="hint">Squares scan best. Dots and rounded are softer and still scan.</p>
             <div class="check-row">
               <input type="checkbox" id="qr-ring" checked>
-              <label for="qr-ring">Accent ring around the code</label>
+              <label for="qr-ring">Accent ring around the card</label>
             </div>
             <p class="hint">Untick for a plain card with nothing moving.</p>
           </fieldset>
 
-          <fieldset class="group">
-            <legend>Text</legend>
-            <div class="num-field num-field-wide">
-              <label for="qr-heading">HEADING (OPTIONAL)</label>
-              <input type="text" id="qr-heading" spellcheck="false" autocomplete="off"
-                maxlength="30" placeholder="SCAN TO GIVE">
+          <fieldset class="group" id="qr-bg-group">
+            <legend>Background</legend>
+            <div class="seg-group">
+              <label class="seg">
+                <input class="vh" type="radio" name="qr-backdrop" id="qr-backdrop-dark" value="dark" checked>
+                <span>DARK</span>
+              </label>
+              <label class="seg">
+                <input class="vh" type="radio" name="qr-backdrop" id="qr-backdrop-light" value="light">
+                <span>LIGHT</span>
+              </label>
+              <label class="seg">
+                <input class="vh" type="radio" name="qr-backdrop" id="qr-backdrop-image" value="image">
+                <span>IMAGE</span>
+              </label>
             </div>
-            <div class="num-field num-field-wide">
-              <label for="qr-caption">CAPTION (OPTIONAL)</label>
-              <input type="text" id="qr-caption" spellcheck="false" autocomplete="off"
-                maxlength="60" placeholder="Thank you for your generosity">
+            <div id="qr-bg-image-row" hidden>
+              <div class="bg-row">
+                <label class="btn btn-file" for="qr-bg-file">CHOOSE IMAGE&#8230;</label>
+                <input class="vh" type="file" id="qr-bg-file" accept="image/png,image/jpeg,image/webp">
+                <span class="bg-name" id="qr-bg-name">No image yet</span>
+                <button type="button" class="btn btn-clear" id="qr-bg-clear" hidden>CLEAR</button>
+              </div>
+              <p class="hint" id="qr-bg-hint">PNG or JPG. Until you choose one the preview shows the dark background.</p>
+              <div class="range-field">
+                <label for="qr-bg-dim">DIM</label>
+                <div class="range-row">
+                  <input type="range" id="qr-bg-dim" min="0" max="80" step="1" value="0">
+                  <span class="range-value" id="qr-bg-dim-value">0%</span>
+                </div>
+              </div>
+              <p class="hint">Darkens your image. Leave at 0 if it's finished artwork.</p>
             </div>
-            <p class="hint">Heading up to 30 characters, caption up to 60</p>
           </fieldset>
 
           <fieldset class="group">
-            <legend>Accent colour</legend>
+            <legend>Position and size</legend>
+            <p class="hint">Drag the code on the preview to move it; drag a corner to resize.</p>
+            <div class="pos-grid" id="qr-pos-grid" role="radiogroup" aria-label="QR position">
+              <button type="button" class="pos-cell" data-x="0" data-y="0" aria-label="Top left"></button>
+              <button type="button" class="pos-cell" data-x="0.5" data-y="0" aria-label="Top centre"></button>
+              <button type="button" class="pos-cell" data-x="1" data-y="0" aria-label="Top right"></button>
+              <button type="button" class="pos-cell" data-x="0" data-y="0.5" aria-label="Middle left"></button>
+              <button type="button" class="pos-cell is-active" data-x="0.5" data-y="0.5" aria-label="Centre"></button>
+              <button type="button" class="pos-cell" data-x="1" data-y="0.5" aria-label="Middle right"></button>
+              <button type="button" class="pos-cell" data-x="0" data-y="1" aria-label="Bottom left"></button>
+              <button type="button" class="pos-cell" data-x="0.5" data-y="1" aria-label="Bottom centre"></button>
+              <button type="button" class="pos-cell" data-x="1" data-y="1" aria-label="Bottom right"></button>
+            </div>
+            <input type="hidden" id="qr-x" value="0.5">
+            <input type="hidden" id="qr-y" value="0.5">
+            <div class="place-row">
+              <label for="qr-size">SIZE</label>
+              <input type="range" id="qr-size" min="50" max="200" step="1" value="100">
+              <span class="place-value" id="qr-size-value">100%</span>
+              <button type="button" class="link-btn" id="qr-place-reset">RESET</button>
+            </div>
+            <!-- Why the slider snapped back, when the card hit a limit. -->
+            <p class="hint" id="qr-size-note" role="status" hidden></p>
+          </fieldset>
+
+          <fieldset class="group" id="qr-ring-group">
+            <legend>Ring colour</legend>
             <div class="swatch-row">
               <label class="swatch">
                 <input class="vh" type="radio" name="qr-accent" id="qr-acc-1" value="#e8b44f" checked>
@@ -1004,33 +1065,6 @@
           </fieldset>
 
           <fieldset class="group">
-            <legend>Position on screen</legend>
-            <div class="pos-grid" id="qr-pos-grid" role="radiogroup" aria-label="QR position">
-              <button type="button" class="pos-cell" data-pos="top-left" aria-label="Top left"></button>
-              <button type="button" class="pos-cell" data-pos="top-center" aria-label="Top centre"></button>
-              <button type="button" class="pos-cell" data-pos="top-right" aria-label="Top right"></button>
-              <button type="button" class="pos-cell" data-pos="mid-left" aria-label="Middle left"></button>
-              <button type="button" class="pos-cell is-active" data-pos="center" aria-label="Centre"></button>
-              <button type="button" class="pos-cell" data-pos="mid-right" aria-label="Middle right"></button>
-              <button type="button" class="pos-cell" data-pos="bottom-left" aria-label="Bottom left"></button>
-              <button type="button" class="pos-cell" data-pos="bottom-center" aria-label="Bottom centre"></button>
-              <button type="button" class="pos-cell" data-pos="bottom-right" aria-label="Bottom right"></button>
-            </div>
-            <input type="hidden" id="qr-position" value="center">
-          </fieldset>
-
-          <fieldset class="group" id="qr-bg-group">
-            <legend>Background image (optional)</legend>
-            <div class="bg-row">
-              <label class="btn btn-file" for="qr-bg-file">CHOOSE IMAGE&#8230;</label>
-              <input class="vh" type="file" id="qr-bg-file" accept="image/png,image/jpeg,image/webp">
-              <span class="bg-name" id="qr-bg-name">Dark backdrop</span>
-              <button type="button" class="btn btn-clear" id="qr-bg-clear" hidden>CLEAR</button>
-            </div>
-            <p class="hint" id="qr-bg-hint">PNG or JPG. It's darkened so the code stays readable.</p>
-          </fieldset>
-
-          <fieldset class="group">
             <legend>Length</legend>
             <div class="num-field num-field-wide">
               <label for="qr-duration">CLIP LENGTH (SECONDS)</label>
@@ -1054,6 +1088,15 @@
         <div class="panel preview-panel">
           <div class="qr-preview-wrap">
             <img id="qr-preview-img" class="qr-preview-img" alt="Live QR card preview" width="960" height="540">
+            <!-- Drag handle for the card (spec: docs/specs/qr-card.md).
+                 Positioned from the server's X-QR-Box header; hidden until
+                 a preview has told us where the card is. -->
+            <div class="qr-box" id="qr-box" hidden>
+              <span class="qr-handle qr-h-nw" data-corner="nw"></span>
+              <span class="qr-handle qr-h-ne" data-corner="ne"></span>
+              <span class="qr-handle qr-h-sw" data-corner="sw"></span>
+              <span class="qr-handle qr-h-se" data-corner="se"></span>
+            </div>
             <div class="qr-preview-loading" id="qr-preview-loading" hidden>GENERATING&#8230;</div>
           </div>
           <div class="preview-meta">

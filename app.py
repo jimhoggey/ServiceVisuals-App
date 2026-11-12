@@ -32,7 +32,7 @@ from render import encoder as render_encoder
 from render.encoder import EXPORTS_DIR, UPLOADS_DIR
 from render.timer import render_timer
 from render.spinner import render_spinner
-from render.qr import render_qr, render_qr_image, render_qr_still
+from render.qr import render_qr, render_qr_image, render_qr_preview
 from render.motionbg import render_motion_bg
 from validation import (DOWNLOAD_FORMATS, MOTIONBG_STYLES, QR_STYLES,
                         SPINNER_MODES, TIMER_STYLES, VALIDATORS,
@@ -192,7 +192,7 @@ def _motionbg_props(options):
 
 
 def _qr_props(options):
-    return {"style": _one_of(options.get("style"), QR_STYLES, "card")}
+    return {"style": _one_of(options.get("style"), QR_STYLES, "squares")}
 
 
 def _ytdlp_version_prop():
@@ -398,11 +398,17 @@ def api_qr_preview():
         clean = validate_qr_options(options)
     except ValidationError as exc:
         return jsonify({"error": str(exc)}), 400
-    img = render_qr_still(clean, max_width=900)
+    img, box, size = render_qr_preview(clean, max_width=900)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
-    return send_file(buf, mimetype="image/png")
+    resp = send_file(buf, mimetype="image/png")
+    # Where the card is and the size actually used (docs/specs/qr-card.md):
+    # the preview draws its drag/resize box from these, so a size the
+    # renderer had to clamp snaps the slider back instead of lying.
+    resp.headers["X-QR-Box"] = ",".join(str(int(v)) for v in box)
+    resp.headers["X-QR-Size"] = str(int(size))
+    return resp
 
 
 @app.route("/api/qr-image", methods=["POST"])
