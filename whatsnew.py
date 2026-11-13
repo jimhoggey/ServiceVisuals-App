@@ -29,6 +29,14 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.48.0": [
+        "Scoreboard: Make a scoreboard from scratch — team names, scores, "
+        "and a Bars, Cards or Podium look.",
+        "Your teams are remembered, so next week you just change the "
+        "scores.",
+        "QR card: Fit shows your whole background image, not a cropped one.",
+        "QR card: the preview shows your image before you type a link.",
+    ],
     "1.47.0": [
         "QR card: the heading and caption now sit inside the white card.",
         "Drag the QR card anywhere on the preview, and drag a corner to "

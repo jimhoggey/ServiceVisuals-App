@@ -622,6 +622,16 @@ for the code, so it is not darkened unless they move Dim.
   empty card — placeholders now start "e.g.".
 - UX check: Dim was live with no image chosen — disabled until one is.
 
+**Found and fixed** (unreleased, after v1.47.0)
+- The owner chose a photo before typing a link and saw an empty preview
+  pane — the preview now shows the background on its own until there is
+  a code to draw.
+- With no heading or caption the padded white card looked heavy — it is
+  now just the code's own quiet zone with tighter corners.
+- Their 3:2 photo lost its bottom line ("FAITH FUN CONNECTION") to the
+  fill-the-screen crop — a FILL / FIT choice under the image; FIT shows
+  the whole image with a blur of itself in the bars, not black.
+
 **Found, not yet fixed**
 - While a corner is dragged, the dashed box leads and the card catches
   up a moment later (each step is a real render).
@@ -631,6 +641,38 @@ Rules for every screen, from this round: when a control is clamped to a
 limit, say why in plain words next to it; the preview stays visible while
 the controls that change it are used; a placeholder never reads as a
 real value.
+
+## Scoreboard tile
+
+Two ways in (spec: `docs/specs/scoreboard-make.md`): **Start from your
+points screen** (upload an image whose numbers become editable — the OCR
+board) and **Make a scoreboard** (type team names and scores, pick a look:
+BARS, CARDS or PODIUM). The operator's model for Make: "the same teams
+every week, new scores" — the form is remembered, so next week is typing
+four numbers.
+
+**Found and fixed** (unreleased, after v1.47.0; scoped UX check)
+- A bad score was reported only in the error panel under EXPORT, ~500 px
+  below the field and off screen, while the preview silently kept the old
+  picture. The message now sits under the team rows, names the team the
+  way it was typed ("Lions's score …"), and the preview dims with "Fix the
+  team above to update the preview".
+- The preview scrolled away while choosing Look and Background — sticky
+  beside the form now.
+- Cycling a colour could give two teams the same colour, so two bars were
+  indistinguishable — the cycle skips colours already in use.
+- The done panel appeared far from EXPORT and could be off screen — it
+  scrolls into view.
+- A tab pasted into a team name drew as a box glyph — whitespace runs
+  become one space.
+
+**Found, not yet fixed**
+- The done panel names the file but not the folder (shared with every
+  tile).
+
+Rule for every screen, from this round: a form error appears beside the
+control that caused it and names things the way the operator sees them;
+a live preview that stops updating because of an error says so.
 
 ## How to use and update this file
 

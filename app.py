@@ -32,7 +32,8 @@ from render import encoder as render_encoder
 from render.encoder import EXPORTS_DIR, UPLOADS_DIR
 from render.timer import render_timer
 from render.spinner import render_spinner
-from render.qr import render_qr, render_qr_image, render_qr_preview
+from render.qr import (render_qr, render_qr_backdrop, render_qr_image,
+                       render_qr_preview)
 from render.motionbg import render_motion_bg
 from validation import (DOWNLOAD_FORMATS, MOTIONBG_STYLES, QR_STYLES,
                         SPINNER_MODES, TIMER_STYLES, VALIDATORS,
@@ -394,12 +395,21 @@ def api_qr_preview():
     options, error = json_body("Body must be a JSON options object.")
     if error:
         return error
+    # No link yet: show the background on its own (no card, no box
+    # headers) rather than an empty pane -- the operator often picks the
+    # image first. Every other option is still validated as usual.
+    empty = isinstance(options.get("url"), str) and not options["url"].strip()
     try:
-        clean = validate_qr_options(options)
+        clean = validate_qr_options(dict(options, url="-") if empty
+                                    else options)
     except ValidationError as exc:
         return jsonify({"error": str(exc)}), 400
-    img, box, size = render_qr_preview(clean, max_width=900)
     buf = io.BytesIO()
+    if empty:
+        render_qr_backdrop(clean, max_width=900).save(buf, format="PNG")
+        buf.seek(0)
+        return send_file(buf, mimetype="image/png")
+    img, box, size = render_qr_preview(clean, max_width=900)
     img.save(buf, format="PNG")
     buf.seek(0)
     resp = send_file(buf, mimetype="image/png")

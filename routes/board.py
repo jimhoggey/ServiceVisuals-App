@@ -18,8 +18,11 @@ from render.scoreboard import (BOARDS_DIR, BoardError, OCRUnavailable,
                                add_box, create_board, delete_board,
                                export_board, list_boards, load_board,
                                render_board, save_values)
+from render.scoremake import (PREVIEW_WIDTH, SCORE_LOOKS,
+                              export_scoreboard_make,
+                              render_scoreboard_make)
 from validation import (ValidationError, _board_id_field, _board_name_field,
-                        _int_field, _values_field)
+                        _int_field, _values_field, validate_scoreboard_make)
 from webutil import json_body
 
 bp = Blueprint("board", __name__)
@@ -260,6 +263,44 @@ def api_board_export(board_id):
     # avoid a circular import at blueprint-registration time.
     from app import track_export
     track_export("scoreboard", started)
+    return jsonify({"filename": filename})
+
+
+@bp.route("/api/scoreboard/make/preview", methods=["POST"])
+def api_scoreboard_make_preview():
+    """A scoreboard built from typed teams (docs/specs/scoreboard-make.md).
+    The server's own PNG at preview size, so what the form shows is exactly
+    what the export writes."""
+    options, error = json_body("Body must be a JSON options object.")
+    if error:
+        return error
+    try:
+        clean = validate_scoreboard_make(options)
+    except ValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    buf = io.BytesIO()
+    render_scoreboard_make(clean, max_width=PREVIEW_WIDTH).save(
+        buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
+
+
+@bp.route("/api/scoreboard/make/export", methods=["POST"])
+def api_scoreboard_make_export():
+    options, error = json_body("Body must be a JSON options object.")
+    if error:
+        return error
+    try:
+        clean = validate_scoreboard_make(options)
+    except ValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    started = time.time()
+    filename = export_scoreboard_make(clean)
+    from app import _one_of, track_export    # see api_board_export
+    # The look is one of our three words; names, titles and scores are
+    # never passed to analytics.
+    track_export("scoreboard_make", started,
+                 look=_one_of(clean["look"], SCORE_LOOKS, "bars"))
     return jsonify({"filename": filename})
 
 

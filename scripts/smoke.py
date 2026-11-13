@@ -1161,8 +1161,16 @@ def check_qr_styles():
     _f, (bl, bt, bw, bh), _s = still(heading="", caption="")
     check("no text: the card is the square around the code", bw == bh,
           "{0}x{1}".format(bw, bh))
-    check("text makes the card taller, not the code smaller",
-          h > bh and w == bw, "{0}x{1} vs {2}x{3}".format(w, h, bw, bh))
+    # Bare, the card's white edge is the code's own quiet zone (the owner:
+    # "the white border can be smaller ... more modern").
+    _o = qr_mod._clean_options(dict(base, heading="", caption=""))
+    _m, _n, _q = qr_mod._qr_matrix(_o["url"])
+    _px = qr_mod._module_px(_n)
+    check("no text: the border is just the 4-module quiet zone",
+          bw == (_n + 2 * qr_mod.QUIET) * _px,
+          "{0} vs {1}".format(bw, (_n + 2 * qr_mod.QUIET) * _px))
+    check("text adds a padded border and height around the same code",
+          h > bh and w > bw, "{0}x{1} vs {2}x{3}".format(w, h, bw, bh))
     heading_band = frame.crop((left + 40, top + 30, left + w - 40,
                                top + 110)).convert("L")
     check("the heading is dark ink on the white card",
@@ -1220,6 +1228,37 @@ def check_qr_styles():
               repr(plain.getpixel((5, 5))))
         check("dim 50 halves it", dimmed.getpixel((5, 5)) == (100, 20, 20),
               repr(dimmed.getpixel((5, 5))))
+        # A 3:2 image: FILL crops its top and bottom bands off, FIT keeps
+        # them (the owner's photo lost its bottom line to the crop).
+        tall = Image.new("RGB", (1500, 1000), (40, 90, 160))
+        tall.paste((230, 200, 40), (0, 0, 1500, 60))
+        tall.save(bg_path)
+        filled, _b, _s = still(background=bg_name, x=0.9)
+        fitted, _b, _s = still(background=bg_name, bg_fit="fit", x=0.9)
+        check("fill: a 3:2 image's top band is cropped off",
+              filled.getpixel((960, 20)) == (40, 90, 160),
+              repr(filled.getpixel((960, 20))))
+        check("fit: the whole image shows, top band included",
+              fitted.getpixel((960, 20)) == (230, 200, 40),
+              repr(fitted.getpixel((960, 20))))
+        check("fit: the side bars are a blur of the image, not black",
+              sum(fitted.getpixel((40, 540))) > 60,
+              repr(fitted.getpixel((40, 540))))
+        try:
+            validation.validate_qr_options(dict(base, bg_fit="zoom"))
+            check("bg_fit must be fill or fit", False, "no error raised")
+        except validation.ValidationError as exc:
+            check("bg_fit must be fill or fit",
+                  str(exc) == 'Image fit must be "fill" or "fit".', str(exc))
+        # No link yet: the preview still shows the image (the owner picked
+        # a photo first and saw an empty pane).
+        import app as _app
+        resp = _app.app.test_client().post(
+            "/api/qr-preview", json={"url": "", "background": bg_name})
+        check("no link: the preview is the background alone, no card box",
+              resp.status_code == 200 and
+              resp.mimetype == "image/png" and
+              "X-QR-Box" not in resp.headers, repr(resp.status_code))
     finally:
         os.unlink(bg_path)
 
@@ -2021,6 +2060,148 @@ def check_scoreboard():
     scoreboard.delete_board(board["id"])
     check("deleting a board removes its folder",
           not os.path.isdir(os.path.join(scoreboard.BOARDS_DIR, board["id"])))
+
+
+def check_scoreboard_make():
+    """docs/specs/scoreboard-make.md: a scoreboard built from typed teams
+    -- the validation strings, three looks, order, ranks and the export."""
+    import io
+    from PIL import Image
+    import app as _app
+    from render import scoremake
+    from render.encoder import UPLOADS_DIR
+    from validation import ValidationError, validate_scoreboard_make
+    print("Scoreboard: make from scratch")
+
+    def teams(scores):
+        return [{"name": "Team {0}".format(i + 1), "score": s,
+                 "color": scoremake.TEAM_COLORS[i % 8]}
+                for i, s in enumerate(scores)]
+
+    def error_of(**changes):
+        body = {"teams": teams([1, 2])}
+        body.update(changes)
+        try:
+            validate_scoreboard_make(body)
+        except ValidationError as exc:
+            return str(exc)
+        return None
+
+    def bad_team(**changes):
+        row = dict(teams([1])[0], **changes)
+        return error_of(teams=[row, teams([1, 2])[1]])
+
+    clean = validate_scoreboard_make({"teams": teams([1, 2])})
+    check("defaults fill in", clean["look"] == "bars" and clean["sort"]
+          and clean["accent"] == "#e8b44f" and clean["bg_dim"] == 40
+          and clean["title"] == "" and clean["background"] == "")
+    check("a long title is refused",
+          error_of(title="x" * 41) ==
+          "The title must be 40 characters or fewer.")
+    check("one team is refused", error_of(teams=teams([1])) ==
+          "Add between 2 and 8 teams.")
+    check("nine teams are refused", error_of(teams=teams([1] * 9)) ==
+          "Add between 2 and 8 teams.")
+    check("a blank name is refused", bad_team(name="  ") ==
+          "Team 1 needs a name (up to 24 characters).")
+    check("a 25-character name is refused", bad_team(name="x" * 25) ==
+          "Team 1 needs a name (up to 24 characters).")
+    score_msg = "Team 1's score must be a whole number from 0 to 999999."
+    check("a fractional score is refused", bad_team(score=1.5) == score_msg)
+    check("a negative score is refused", bad_team(score=-1) == score_msg)
+    check("a too-big score is refused", bad_team(score=1000000) == score_msg)
+    check("a true/false score is refused", bad_team(score=True) == score_msg)
+    check("a bad colour is refused", bad_team(color="red") ==
+          'Team 1\'s colour must be a hex colour like "#e2564b".')
+    check("a bad look is refused", error_of(look="neon") ==
+          "That scoreboard look is not valid.")
+    check("a non-bool sort is refused", error_of(sort="yes") ==
+          "Sort must be true or false.")
+    check("a bad accent uses the shared message",
+          "Accent" in (error_of(accent="gold") or ""))
+    check("a missing background uses the shared message",
+          "re-upload" in (error_of(background="nope-nope.png") or ""))
+    check("dim past 80 is refused", error_of(bg_dim=81) ==
+          "Dim must be a whole number between 0 and 80.")
+
+    # Order, ranks, leaders: the data the three looks draw from.
+    rows = teams([10, 30, 30, 5])
+    by_sort = [t["name"] for t in scoremake.order_teams(rows, True, "bars")]
+    check("sort puts the highest first, ties in entered order",
+          by_sort == ["Team 2", "Team 3", "Team 1", "Team 4"], repr(by_sort))
+    for look in ("bars", "cards"):
+        kept = [t["name"] for t in scoremake.order_teams(rows, False, look)]
+        check("sort off keeps the entered order ({0})".format(look),
+              kept == ["Team 1", "Team 2", "Team 3", "Team 4"], repr(kept))
+    pod = scoremake.order_teams(rows, False, "podium")
+    check("podium always sorts, whatever sort says",
+          [t["name"] for t in pod] == by_sort)
+    check("ties share a rank (1, 1, 3, 4)",
+          [t["rank"] for t in pod] == [1, 1, 3, 4],
+          repr([t["rank"] for t in pod]))
+    check("every tied leader is marked",
+          [t["leader"] for t in pod] == [True, True, False, False])
+    zero = scoremake.order_teams(teams([0, 0, 0]), True, "bars")
+    check("all-zero has no leader", not any(t["leader"] for t in zero))
+
+    # Every look renders full size, for the smallest and largest board.
+    for look in scoremake.SCORE_LOOKS:
+        for scores in ([4, 9], [5, 3, 0, 12, 7, 12, 1, 999999]):
+            frame = scoremake.render_scoreboard_make(validate_scoreboard_make(
+                {"teams": teams(scores), "look": look, "title": "Games"}))
+            check("{0} renders 1920x1080 for {1} teams".format(
+                look, len(scores)), frame.size == (1920, 1080))
+    # Sort changes what bars draws: the leader moves to the top row.
+    def top_row_colour(sort):
+        frame = scoremake.render_scoreboard_make(validate_scoreboard_make(
+            {"teams": teams([1, 50]), "look": "bars", "sort": sort}))
+        return frame.getpixel((900, 540 - 205))
+    check("sort on/off changes the bars image",
+          top_row_colour(True) != top_row_colour(False))
+
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    bg_name = "smoke-scoremake-bg.png"
+    bg_path = os.path.join(UPLOADS_DIR, bg_name)
+    Image.new("RGB", (1920, 1080), (200, 40, 40)).save(bg_path)
+    export_name = None
+    try:
+        frame = scoremake.render_scoreboard_make(validate_scoreboard_make(
+            {"teams": teams([1, 2]), "background": bg_name}))
+        check("an image background shows through, dimmed 40 %",
+              frame.getpixel((5, 5)) == (120, 24, 24),
+              repr(frame.getpixel((5, 5))))
+    finally:
+        os.remove(bg_path)
+
+    client = _app.app.test_client()
+    resp = client.post("/api/scoreboard/make/preview",
+                       json={"teams": teams([3, 8]), "look": "cards"})
+    preview = Image.open(io.BytesIO(resp.data))
+    check("preview route returns a 900-wide PNG",
+          resp.status_code == 200 and preview.format == "PNG"
+          and preview.width == 900, repr(resp.status_code))
+    resp = client.post("/api/scoreboard/make/preview",
+                       json={"teams": teams([3])})
+    check("preview route answers a bad board with its message",
+          resp.status_code == 400 and resp.get_json()["error"] ==
+          "Add between 2 and 8 teams.")
+    try:
+        resp = client.post("/api/scoreboard/make/export",
+                           json={"teams": teams([3, 8]), "look": "podium"})
+        export_name = (resp.get_json() or {}).get("filename", "")
+        path = os.path.join(EXPORTS_DIR, export_name)
+        check("export writes scoreboard_<look>_<stamp>.png into exports/",
+              resp.status_code == 200 and os.path.isfile(path)
+              and export_name.startswith("scoreboard_podium_")
+              and export_name.endswith(".png"), repr(export_name))
+        if os.path.isfile(path):
+            check("the exported PNG is 1920x1080",
+                  Image.open(path).size == (1920, 1080))
+    finally:
+        if export_name:
+            path = os.path.join(EXPORTS_DIR, export_name)
+            if os.path.isfile(path):
+                os.remove(path)
 
 
 def check_download_retry_and_remove():
@@ -4729,6 +4910,8 @@ def main():
         check_windows_ocr()
         print()
         check_scoreboard()
+        print()
+        check_scoreboard_make()
     finally:
         shutil.rmtree(_BOARD_TMP, ignore_errors=True)
 

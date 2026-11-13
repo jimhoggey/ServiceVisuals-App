@@ -57,7 +57,10 @@ _REGION_HOSTS = {"US": "https://us.aptabase.com", "EU": "https://eu.aptabase.com
 # Every event this app can ever send. Names only; see the module docstring.
 EVENTS = (
     "app_started",      # the app opened
-    # props: tool (timer|spinner|qr|qr_png|motionbg|scoreboard|download),
+    # props: tool (timer|spinner|qr|qr_png|motionbg|scoreboard|
+    # scoreboard_make|download),
+    # scoreboard_make adds look (bars|cards|podium) -- never a team name,
+    # title or score (scoreboard-make.md),
     # render_seconds (how long it took, in seconds, one decimal), took (a
     # readable bucket of the same), and per-tool mode/style/bg/format —
     # all fixed words of ours, never user content. A download adds format

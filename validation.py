@@ -12,10 +12,11 @@ import re
 from urllib.parse import urlsplit
 
 from render.encoder import ALPHA_FORMATS, UPLOADS_DIR
-from render.qr import QR_BACKDROPS, QR_STYLES
+from render.qr import BG_FITS, QR_BACKDROPS, QR_STYLES
 import beatsound
 from render import beat
 from render.timer import CLOCK_STYLES, parse_countdown_format
+from render.scoremake import SCORE_LOOKS
 from backgrounds import (
     BACKGROUNDS_DIR, BACKGROUND_ID_RE, BACKGROUNDS_PER_TIMER_MAX)
 
@@ -621,6 +622,11 @@ def validate_qr_options(options):
     # 0 by default, like the timer's: an uploaded image is finished
     # artwork until the operator says otherwise.
     bg_dim = _int_field(options, "bg_dim", 0, 80, 0, "Dim")
+    # An image that isn't 16:9 is cropped to fill the screen, or shown
+    # whole ("fit") with its own blurred copy in the bars.
+    bg_fit = options.get("bg_fit", "fill")
+    if not isinstance(bg_fit, str) or bg_fit not in BG_FITS:
+        raise ValidationError('Image fit must be "fill" or "fit".')
 
     ring = options.get("ring", True)
     if not isinstance(ring, bool):
@@ -638,6 +644,7 @@ def validate_qr_options(options):
         "style": style,
         "backdrop": backdrop,
         "bg_dim": bg_dim,
+        "bg_fit": bg_fit,
         "ring": ring,
         "background": _background_field(options),
     }
@@ -858,3 +865,70 @@ def _values_field(board, raw):
                 .format(value[:20]))
         clean[key] = value
     return clean
+
+
+def validate_scoreboard_make(options):
+    """docs/specs/scoreboard-make.md: a scoreboard built from scratch.
+
+    Error strings are the spec's, word for word -- the form shows them.
+    """
+    title = options.get("title", "")
+    if title is None:
+        title = ""
+    if not isinstance(title, str) or len(title.strip()) > 40:
+        raise ValidationError("The title must be 40 characters or fewer.")
+    title = title.strip()
+
+    teams_in = options.get("teams")
+    if not isinstance(teams_in, list) or not 2 <= len(teams_in) <= 8:
+        raise ValidationError("Add between 2 and 8 teams.")
+    teams = []
+    for n, row in enumerate(teams_in, 1):
+        if not isinstance(row, dict):
+            raise ValidationError(
+                "Team {0} needs a name (up to 24 characters).".format(n))
+        name = row.get("name")
+        # Runs of whitespace (a pasted tab drew as a box glyph) become one
+        # space before anything is measured or drawn.
+        if isinstance(name, str):
+            name = " ".join(name.split())
+        if not isinstance(name, str) or not 1 <= len(name) <= 24:
+            raise ValidationError(
+                "Team {0} needs a name (up to 24 characters).".format(n))
+        score = row.get("score")
+        # A text box may hand over "12"; digits only, so "1e3" or "-4"
+        # still fail rather than being guessed at.
+        if isinstance(score, str) and score.isdigit() and len(score) < 8:
+            score = int(score)
+        if isinstance(score, float) and score.is_integer():
+            score = int(score)
+        if (isinstance(score, bool) or not isinstance(score, int)
+                or not 0 <= score <= 999999):
+            raise ValidationError(
+                "Team {0}'s score must be a whole number from 0 to "
+                "999999.".format(n))
+        color = row.get("color")
+        if not isinstance(color, str) or not HEX_COLOR_RE.fullmatch(color):
+            raise ValidationError(
+                'Team {0}\'s colour must be a hex colour like '
+                '"#e2564b".'.format(n))
+        teams.append({"name": name.strip(), "score": score,
+                      "color": color.lower()})
+
+    look = options.get("look", "bars")
+    if not isinstance(look, str) or look not in SCORE_LOOKS:
+        raise ValidationError("That scoreboard look is not valid.")
+    sort = options.get("sort", True)
+    if not isinstance(sort, bool):
+        raise ValidationError("Sort must be true or false.")
+    bg_dim = options.get("bg_dim", 40)
+    if (isinstance(bg_dim, bool) or not isinstance(bg_dim, (int, float))
+            or bg_dim != int(bg_dim) or not 0 <= bg_dim <= 80):
+        raise ValidationError(
+            "Dim must be a whole number between 0 and 80.")
+    return {
+        "title": title, "teams": teams, "look": look, "sort": sort,
+        "accent": _accent_field(options),
+        "background": _background_field(options),
+        "bg_dim": int(bg_dim),
+    }

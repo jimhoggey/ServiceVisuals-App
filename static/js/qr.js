@@ -52,15 +52,27 @@
       // yet it previews (and exports) as DARK, as the spec says.
       backdrop: backdrop === "image" ? "dark" : backdrop,
       bgDim: toInt($("qr-bg-dim").value, 0),
+      bgFit: $("qr-bg-fit-fit").checked ? "fit" : "fill",
       background: backdrop === "image" ? qrBackground : "",
       style: styleEl ? styleEl.value : "squares",
       ring: $("qr-ring").checked
     };
   }
 
+  var URL_EMPTY = "Enter a website or some text to encode.";
+
+  // Everything validateQr checks except that a link was typed.
+  function validateQrBesidesUrl() {
+    var saved = $("qr-url").value;
+    $("qr-url").value = "-";
+    var err = validateQr();
+    $("qr-url").value = saved;
+    return err;
+  }
+
   function validateQr() {
     var q = readQr();
-    if (q.url.length < 1) return "Enter a website or some text to encode.";
+    if (q.url.length < 1) return URL_EMPTY;
     if (q.url.length > 1000) return "The website or text must be 1000 characters or fewer.";
     if (q.heading.length > 30) return "The heading must be 30 characters or fewer.";
     if (q.caption.length > 60) return "The caption must be 60 characters or fewer.";
@@ -84,6 +96,7 @@
         size: q.size,
         backdrop: q.backdrop,
         bg_dim: q.bgDim,
+        bg_fit: q.bgFit,
         background: q.background,
         style: q.style,
         ring: q.ring
@@ -165,7 +178,11 @@
   // Fetch a REAL still of the card from the server so the preview shows the
   // exact scannable code (and any background image / position). Debounced.
   function fetchQrPreview() {
-    if (validateQr()) {
+    // No link yet is the one gap the server previews anyway, as the
+    // background on its own: the owner picked a photo first and stared
+    // at an empty pane. Any other problem still blanks the preview.
+    var err = validateQr();
+    if (err && !(err === URL_EMPTY && !validateQrBesidesUrl())) {
       // Nothing to preview yet: a blank pane, not a broken-image icon with
       // "Live QR card preview" alt text (which is what an <img> with no
       // src shows). visibility, not hidden — the img's display rule wins.

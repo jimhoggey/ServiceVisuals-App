@@ -12,6 +12,7 @@
 <script src="/static/js/qr.js" defer></script>
 <script src="/static/js/motionbg.js" defer></script>
 <script src="/static/js/board.js" defer></script>
+<script src="/static/js/scoremake.js" defer></script>
 <script src="/static/js/download.js" defer></script>
 <script src="/static/js/shell.js" defer></script>
 </head>
@@ -997,6 +998,19 @@
                 <button type="button" class="btn btn-clear" id="qr-bg-clear" hidden>CLEAR</button>
               </div>
               <p class="hint" id="qr-bg-hint">PNG or JPG. Until you choose one the preview shows the dark background.</p>
+              <!-- FILL crops an image that isn't 16:9 to the screen; FIT
+                   shows all of it, with a blur of itself in the bars. -->
+              <div class="seg-group" role="radiogroup" aria-label="Image fit">
+                <label class="seg">
+                  <input class="vh" type="radio" name="qr-bg-fit" id="qr-bg-fit-fill" value="fill" checked>
+                  <span>FILL</span>
+                </label>
+                <label class="seg">
+                  <input class="vh" type="radio" name="qr-bg-fit" id="qr-bg-fit-fit" value="fit">
+                  <span>FIT</span>
+                </label>
+              </div>
+              <p class="hint">Fill covers the screen and trims the edges. Fit shows the whole image.</p>
               <div class="range-field">
                 <label for="qr-bg-dim">DIM</label>
                 <div class="range-row">
@@ -1249,18 +1263,32 @@
 
     <!-- ---------------------------- A. PICKER ---------------------------- -->
     <div class="panel board-picker" id="board-picker">
-      <h3 class="board-sub">Start from your points screen</h3>
-      <div class="bg-row">
-        <label class="btn btn-file" for="board-file">CHOOSE IMAGE&#8230;</label>
-        <input class="vh" type="file" id="board-file" accept="image/png,image/jpeg">
-        <span class="bg-name" id="board-file-name">No image chosen</span>
-        <span class="board-reading" id="board-reading" role="status" hidden>
-          <span class="board-reading-spin" aria-hidden="true"></span>
-          <span id="board-reading-text">READING THE NUMBERS&#8230;</span>
-        </span>
+      <!-- Two ways in. Left is the original read-an-image flow, untouched;
+           right builds a board from nothing (docs/specs/scoreboard-make.md). -->
+      <div class="board-choice">
+        <div class="board-choice-card">
+          <h3 class="board-sub">Start from your points screen</h3>
+          <div class="bg-row">
+            <label class="btn btn-file" for="board-file">CHOOSE IMAGE&#8230;</label>
+            <input class="vh" type="file" id="board-file" accept="image/png,image/jpeg">
+            <span class="bg-name" id="board-file-name">No image chosen</span>
+            <span class="board-reading" id="board-reading" role="status" hidden>
+              <span class="board-reading-spin" aria-hidden="true"></span>
+              <span id="board-reading-text">READING THE NUMBERS&#8230;</span>
+            </span>
+          </div>
+          <p class="hint" id="board-upload-hint">PNG or JPG. It's read once &#8212; every number on it
+            becomes editable, and the board is saved so you only do this the first time.</p>
+        </div>
+        <div class="board-choice-card">
+          <h3 class="board-sub">Make a scoreboard</h3>
+          <div class="bg-row">
+            <button type="button" class="btn btn-accent" id="scoreboard-open">MAKE A SCOREBOARD</button>
+          </div>
+          <p class="hint">No points screen yet? Type your team names and scores and pick a look.
+            Your teams are remembered for next week.</p>
+        </div>
       </div>
-      <p class="hint" id="board-upload-hint">PNG or JPG. It's read once &#8212; every number on it
-        becomes editable, and the board is saved so you only do this the first time.</p>
 
       <h3 class="board-sub board-sub-list">Saved boards</h3>
       <ul class="board-list" id="board-list"></ul>
@@ -1325,6 +1353,163 @@
           <p class="done-filename" id="board-filename"></p>
           <div class="btn-row">
             <button class="btn btn-accent reveal-btn" id="board-reveal" type="button">SHOW FILE</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------------------------- C. MAKE ONE ---------------------------- -->
+    <!-- Build a board from nothing (static/js/scoremake.js). Its shared
+         export ids use the prefix "scoreboard-" (not "board-") so they never
+         collide with the editor's, and so the session list says SCOREBOARD. -->
+    <div class="board-make" id="board-make" hidden>
+      <div class="config-grid">
+        <form class="config-form panel" id="scoreboard-form" novalidate>
+          <fieldset class="fields" id="scoreboard-fields">
+
+            <button type="button" class="link-btn board-make-back" id="scoreboard-back">&#8592; BACK TO CHOICES</button>
+
+            <fieldset class="group">
+              <legend>Title</legend>
+              <input type="text" id="scoreboard-title" spellcheck="false" autocomplete="off"
+                maxlength="40" placeholder="e.g. Youth night">
+              <p class="hint">Optional. Shown across the top, up to 40 characters.</p>
+            </fieldset>
+
+            <fieldset class="group">
+              <legend>Teams</legend>
+              <div class="sb-teams" id="scoreboard-teams" role="list"></div>
+              <p class="hint is-bad" id="scoreboard-team-error" role="alert" hidden></p>
+              <div class="sb-team-tools">
+                <button type="button" class="btn" id="scoreboard-add">&#43; ADD TEAM</button>
+                <span class="hint" id="scoreboard-team-note">2 to 8 teams. Click a colour dot to change it.</span>
+              </div>
+            </fieldset>
+
+            <fieldset class="group">
+              <legend>Look</legend>
+              <div class="seg-group" role="radiogroup" aria-label="Scoreboard look">
+                <label class="seg">
+                  <input class="vh" type="radio" name="scoreboard-look" id="scoreboard-look-bars" value="bars" checked>
+                  <span>BARS</span>
+                </label>
+                <label class="seg">
+                  <input class="vh" type="radio" name="scoreboard-look" id="scoreboard-look-cards" value="cards">
+                  <span>CARDS</span>
+                </label>
+                <label class="seg">
+                  <input class="vh" type="radio" name="scoreboard-look" id="scoreboard-look-podium" value="podium">
+                  <span>PODIUM</span>
+                </label>
+              </div>
+              <p class="hint" id="scoreboard-look-hint"></p>
+              <div class="check-row sb-sort-row">
+                <input type="checkbox" id="scoreboard-sort" checked>
+                <label for="scoreboard-sort">Highest score first</label>
+              </div>
+              <p class="hint" id="scoreboard-sort-note" hidden>Podium always puts the highest score first.</p>
+            </fieldset>
+
+            <fieldset class="group">
+              <legend>Accent colour</legend>
+              <div class="swatch-row">
+                <label class="swatch">
+                  <input class="vh" type="radio" name="scoreboard-accent" id="scoreboard-acc-1" value="#e8b44f" checked>
+                  <span class="swatch-dot" style="--c:#e8b44f"></span><span class="vh">Amber</span>
+                </label>
+                <label class="swatch">
+                  <input class="vh" type="radio" name="scoreboard-accent" id="scoreboard-acc-2" value="#5aa9e6">
+                  <span class="swatch-dot" style="--c:#5aa9e6"></span><span class="vh">Blue</span>
+                </label>
+                <label class="swatch">
+                  <input class="vh" type="radio" name="scoreboard-accent" id="scoreboard-acc-3" value="#e2725b">
+                  <span class="swatch-dot" style="--c:#e2725b"></span><span class="vh">Coral</span>
+                </label>
+                <label class="swatch">
+                  <input class="vh" type="radio" name="scoreboard-accent" id="scoreboard-acc-4" value="#7fb069">
+                  <span class="swatch-dot" style="--c:#7fb069"></span><span class="vh">Green</span>
+                </label>
+                <label class="swatch">
+                  <input class="vh" type="radio" name="scoreboard-accent" id="scoreboard-acc-5" value="#9b7ede">
+                  <span class="swatch-dot" style="--c:#9b7ede"></span><span class="vh">Violet</span>
+                </label>
+                <label class="swatch-custom">
+                  <input type="color" id="scoreboard-accent-custom" value="#e8b44f">
+                  <span>CUSTOM</span>
+                </label>
+              </div>
+              <p class="hint">Used for the title and for marking who is leading.</p>
+            </fieldset>
+
+            <fieldset class="group">
+              <legend>Background</legend>
+              <div class="seg-group">
+                <label class="seg">
+                  <input class="vh" type="radio" name="scoreboard-backdrop" id="scoreboard-backdrop-dark" value="dark" checked>
+                  <span>DARK</span>
+                </label>
+                <label class="seg">
+                  <input class="vh" type="radio" name="scoreboard-backdrop" id="scoreboard-backdrop-image" value="image">
+                  <span>IMAGE</span>
+                </label>
+              </div>
+              <div id="scoreboard-bg-image-row" hidden>
+                <div class="bg-row">
+                  <label class="btn btn-file" for="scoreboard-bg-file">CHOOSE IMAGE&#8230;</label>
+                  <input class="vh" type="file" id="scoreboard-bg-file" accept="image/png,image/jpeg,image/webp">
+                  <span class="bg-name" id="scoreboard-bg-name">No image yet</span>
+                  <button type="button" class="btn btn-clear" id="scoreboard-bg-clear" hidden>CLEAR</button>
+                </div>
+                <p class="hint">PNG or JPG. Until you choose one the preview shows the dark background.</p>
+                <div class="range-field">
+                  <label for="scoreboard-bg-dim">DIM</label>
+                  <div class="range-row">
+                    <input type="range" id="scoreboard-bg-dim" min="0" max="80" step="1" value="40">
+                    <span class="range-value" id="scoreboard-bg-dim-value">40%</span>
+                  </div>
+                </div>
+                <p class="hint">Darkens your image so the names stay readable. 40% suits most photos.</p>
+              </div>
+            </fieldset>
+
+            <div class="export-row">
+              <button class="btn-export" id="scoreboard-export" type="button">EXPORT PNG</button>
+            </div>
+          </fieldset>
+
+          <div class="error-panel" id="scoreboard-error" role="alert" hidden></div>
+        </form>
+
+        <div class="preview-pane">
+          <div class="panel preview-panel">
+            <!-- Same preview frame as the QR card (shared .qr-preview-* rules). -->
+            <div class="qr-preview-wrap">
+              <img id="scoreboard-preview-img" class="qr-preview-img" alt="Live scoreboard preview" width="960" height="540"
+                   style="visibility:hidden">
+              <div class="qr-preview-loading" id="scoreboard-preview-loading" hidden>DRAWING&#8230;</div>
+              <div class="sb-preview-paused" id="scoreboard-preview-paused" hidden>Fix the team above to update the preview</div>
+            </div>
+            <div class="preview-meta">
+              <p class="preview-caption">LIVE PREVIEW &#8212; this is exactly what exports</p>
+              <p class="spec-line">1920x1080 - PNG</p>
+            </div>
+
+            <div class="progress-panel" id="scoreboard-progress" hidden>
+              <div class="progress-head">
+                <p class="progress-status" id="scoreboard-status" aria-live="polite">QUEUED</p>
+                <p class="progress-pct" id="scoreboard-pct">0%</p>
+              </div>
+              <div class="progress-track" id="scoreboard-track" role="progressbar" aria-label="Export progress"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-fill" id="scoreboard-bar"></div>
+              </div>
+              <div class="done-panel" id="scoreboard-done" hidden>
+                <p class="done-filename" id="scoreboard-filename"></p>
+                <div class="btn-row">
+                  <button class="btn btn-accent reveal-btn" id="scoreboard-reveal" type="button">SHOW FILE</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

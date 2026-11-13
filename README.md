@@ -140,7 +140,10 @@ contain a file path). The full list of events lives in [`stats.py`](stats.py).
      keeps itself current automatically. Downloading a video is not a
      licence to show it — that call, and any rights/licensing needed for
      public use, is the church's responsibility.
-   - **Scoreboard**: upload your existing points screen once. The app reads the
+   - **Scoreboard**: no points screen yet? **Make a scoreboard** — type up to
+     eight team names and scores, pick a look (Bars, Cards or Podium) and a
+     dark or image background, and export a PNG; your teams are remembered
+     for next week. Or upload your existing points screen once. The app reads the
      numbers with your operating system's own text recognition and saves it as a
      reusable board. Each week: open it, click a number, type the new score,
      export. The PNG is identical to your original except for the digits you

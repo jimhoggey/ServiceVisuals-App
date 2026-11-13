@@ -60,6 +60,13 @@ and ≤ 1080 − 2·EDGE tall, `EDGE = 40`. `f = module_px / base_px`; the
 | `style` | `"squares"` `"dots"` `"rounded"` | `"squares"` | `That QR style is not valid.` |
 | `backdrop` | `"dark"` `"light"` | `"dark"` | `That QR background is not valid.` |
 | `bg_dim` | whole number 0–80 | 0 | `Dim must be a whole number between 0 and 80.` |
+| `bg_fit` | `"fill"` `"fit"` | `"fill"` | `Image fit must be "fill" or "fit".` |
+
+Addendum (2026-11-14): FILL covers the frame and crops; FIT shows the whole
+image, bars filled by a blurred copy darkened 35 %. With no heading and no
+caption the card is "bare": no pad (the white edge is the quiet zone),
+radius 1.75 modules. `/api/qr-preview` with an empty `url` returns the
+background alone, without the `X-QR-*` headers.
 | `x`, `y` | number 0–1 | 0.5 | `Position must be a number from 0 to 1.` |
 | `size` | whole number 50–200 | 100 | `Size must be a whole number between 50 and 200.` |
 

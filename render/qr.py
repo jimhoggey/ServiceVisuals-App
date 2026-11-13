@@ -47,7 +47,7 @@ import re
 
 import segno
 from segno import consts as _segno_consts
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 from . import fonts
 from .encoder import (FrameEncoder, HEIGHT, UPLOADS_DIR, WIDTH,
@@ -131,6 +131,7 @@ QR_STYLES = ("squares", "dots", "rounded")
 DEFAULT_STYLE = "squares"
 QR_BACKDROPS = ("dark", "light")
 DEFAULT_BACKDROP = "dark"
+BG_FITS = ("fill", "fit")       # an uploaded image: crop to fill, or whole
 
 
 # ---------------------------------------------------------------- helpers
@@ -189,6 +190,9 @@ def _clean_options(options):
     backdrop = options.get("backdrop", DEFAULT_BACKDROP)
     if backdrop not in QR_BACKDROPS:
         backdrop = DEFAULT_BACKDROP
+    bg_fit = options.get("bg_fit", "fill")
+    if bg_fit not in BG_FITS:
+        bg_fit = "fill"
 
     background = _resolve_background(options.get("background"))
 
@@ -207,6 +211,7 @@ def _clean_options(options):
         "url": url, "heading": heading, "caption": caption,
         "accent": str(accent), "x": x, "y": y, "size": size,
         "style": style, "backdrop": backdrop, "bg_dim": bg_dim,
+        "bg_fit": bg_fit,
         "background": background, "duration": duration, "ring": ring,
     }
 
@@ -234,23 +239,48 @@ def _vignette_background(base_hex=BG_BASE, edge_hex=BG_EDGE):
     return img.resize((WIDTH, HEIGHT), _BILINEAR)
 
 
-def _image_background(path, dim):
-    """Cover-fit an uploaded image to 1080p, darkened by `dim` percent.
-
-    It used to be a fixed 48 % so the text above and below the card stayed
-    legible; the text is inside the card now, and the owner's image may be
-    finished artwork with a gap made for the code, so 0 leaves it alone."""
-    try:
-        img = Image.open(path).convert("RGB")
-    except Exception:
-        return _vignette_background()
+def _cover(img):
+    """Scale to cover 1920x1080 and centre-crop the overflow."""
     iw, ih = img.size
-    scale = max(WIDTH / iw, HEIGHT / ih)
+    scale = max(WIDTH / float(iw), HEIGHT / float(ih))
     nw, nh = int(math.ceil(iw * scale)), int(math.ceil(ih * scale))
     img = img.resize((nw, nh), _LANCZOS)
     x = (nw - WIDTH) // 2
     y = (nh - HEIGHT) // 2
-    img = img.crop((x, y, x + WIDTH, y + HEIGHT))
+    return img.crop((x, y, x + WIDTH, y + HEIGHT))
+
+
+def _image_background(path, dim, fit="fill"):
+    """An uploaded image at 1080p, darkened by `dim` percent.
+
+    `fill` covers the frame and crops what overflows; `fit` shows the whole
+    image -- the owner's 3:2 photo lost its "FAITH FUN CONNECTION" line to
+    the crop -- with the bars filled by a blurred, darkened copy of the same
+    image instead of black, so it still reads as one picture.
+
+    It used to be a fixed 48 % dim so the text above and below the card
+    stayed legible; the text is inside the card now, and the owner's image
+    may be finished artwork with a gap made for the code, so 0 leaves it
+    alone."""
+    try:
+        img = Image.open(path).convert("RGB")
+    except Exception:
+        return _vignette_background()
+    if fit == "fit":
+        iw, ih = img.size
+        scale = min(WIDTH / float(iw), HEIGHT / float(ih))
+        nw, nh = max(1, int(round(iw * scale))), max(1, int(round(ih * scale)))
+        whole = img.resize((nw, nh), _LANCZOS)
+        # Blur a small copy (cheap) and darken it, so the bars sit back
+        # behind the real picture.
+        back = _cover(img.resize((max(1, iw // 8), max(1, ih // 8)),
+                                 _BILINEAR))
+        back = back.filter(ImageFilter.GaussianBlur(40))
+        back = Image.blend(back, Image.new("RGB", (WIDTH, HEIGHT)), 0.35)
+        back.paste(whole, ((WIDTH - nw) // 2, (HEIGHT - nh) // 2))
+        img = back
+    else:
+        img = _cover(img)
     if not dim:
         return img
     scrim = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
@@ -261,7 +291,8 @@ def _build_background(opts):
     # An uploaded image wins; the card carries its own white field and
     # quiet zone, so any image behind it is safe for the scan.
     if opts["background"]:
-        return _image_background(opts["background"], opts["bg_dim"])
+        return _image_background(opts["background"], opts["bg_dim"],
+                                 opts["bg_fit"])
     if opts["backdrop"] == "light":
         return _vignette_background(LIGHT_BASE, LIGHT_EDGE)
     return _vignette_background()
@@ -328,17 +359,25 @@ def _card_geometry(opts, n, module_px):
     module size, so a resized card is the same card, bigger or smaller.
 
     Stack: pad, heading, code with its quiet zone, caption, pad. A missing
-    line takes its gap with it, so with no text this is exactly the old
-    square card."""
+    line takes its gap with it.
+
+    With no text at all the card is "bare": no pad, so its white edge is
+    the code's own 4-module quiet zone, and a tighter corner. The owner
+    found the padded square too heavy with nothing in it ("the white
+    border ... can be smaller ... a bit more modern"). The radius stays
+    under 2 modules, so the rounding never reaches a module."""
     f = module_px / float(_module_px(n))
-    pad = int(round(CARD_PAD * f))
     code_px = module_px * n
     inner = code_px + 2 * QUIET * module_px    # code + quiet zone
 
     heading = opts["heading"].upper()
     caption = opts["caption"]
+    bare = not heading and not caption
+    pad = 0 if bare else int(round(CARD_PAD * f))
+    radius = (int(round(1.75 * module_px)) if bare
+              else int(round(CARD_RADIUS * f)))
     geo = {"module_px": module_px, "code_px": code_px, "f": f,
-           "radius": int(round(CARD_RADIUS * f)),
+           "radius": radius,
            "heading": heading, "caption": caption,
            "heading_font": None, "caption_font": None}
     text_w = 0
@@ -534,6 +573,18 @@ def render_qr_preview(options, max_width=900):
         frame = frame.resize((max_width, h), _LANCZOS)
     box = (geo["left"], geo["top"], geo["width"], geo["height"])
     return frame, box, geo["size"]
+
+
+def render_qr_backdrop(options, max_width=900):
+    """Just the background, for the preview before there is anything to
+    encode -- the owner uploaded a photo and saw an empty pane until a
+    link was typed. `url` is not needed (or looked at)."""
+    opts = _clean_options(dict(options, url="-"))
+    frame = _build_background(opts)
+    if max_width and max_width < WIDTH:
+        frame = frame.resize((max_width, int(HEIGHT * max_width / WIDTH)),
+                             _LANCZOS)
+    return frame
 
 
 def render_qr_still(options, max_width=900):
