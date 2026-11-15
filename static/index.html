@@ -14,6 +14,7 @@
 <script src="/static/js/board.js" defer></script>
 <script src="/static/js/scoremake.js" defer></script>
 <script src="/static/js/download.js" defer></script>
+<script src="/static/js/trim.js" defer></script>
 <script src="/static/js/shell.js" defer></script>
 </head>
 <body>
@@ -1587,6 +1588,62 @@
           <div class="btn-row">
             <button class="btn btn-accent reveal-btn" id="download-reveal" type="button">SHOW FILE</button>
             <button class="btn" id="download-retry-failed" type="button" hidden>RETRY FAILED</button>
+            <button class="btn" id="download-trim-open" type="button" hidden>&#9986; TRIM THIS CLIP</button>
+          </div>
+
+          <!-- Trim a copy of the file just downloaded (docs/specs/clip-trim.md). -->
+          <div class="trim-panel" id="trim-panel" hidden>
+            <p class="trim-title">TRIM THIS CLIP</p>
+            <p class="hint">Drag the gold handles to the part you want. Your full download is kept.</p>
+            <video class="trim-player" id="trim-player" controls preload="metadata" playsinline></video>
+
+            <!-- Each time is shown once: start and end under their handles
+                 (click to type), the clip's length inside the gold part. -->
+            <div class="trim-timeline" id="trim-timeline">
+              <div class="trim-keep" id="trim-keep"><span class="trim-keep-label" id="trim-keep-label"></span></div>
+              <div class="trim-handle" id="trim-handle-start"></div>
+              <div class="trim-handle" id="trim-handle-end"></div>
+              <div class="trim-playhead" id="trim-playhead"></div>
+              <span class="trim-keep-outside" id="trim-keep-outside"></span>
+            </div>
+            <div class="trim-scale" id="trim-scale">
+              <input type="text" class="trim-mark" id="trim-start" value="0:00" spellcheck="false" autocomplete="off" aria-label="Clip starts at">
+              <input type="text" class="trim-mark" id="trim-end" value="0:00" spellcheck="false" autocomplete="off" aria-label="Clip ends at">
+              <span class="trim-total" id="trim-total"></span>
+            </div>
+            <p class="trim-click-hint">Click a gold time to type it.</p>
+
+            <div class="trim-lengths">
+              <span class="trim-lengths-label">LENGTH FROM START</span>
+              <button class="btn trim-small" type="button" data-trim-length="30">30 SEC</button>
+              <button class="btn trim-small" type="button" data-trim-length="60">1 MIN</button>
+              <button class="btn trim-small" type="button" data-trim-length="300">5 MIN</button>
+            </div>
+
+            <p class="trim-summary" id="trim-summary" aria-live="polite">Loading the video&#8230;</p>
+            <div class="trim-actions">
+              <button class="btn" id="trim-play" type="button">&#9654; PLAY MY CLIP</button>
+              <button class="btn-export" id="trim-export" type="button" disabled>SAVE TRIMMED COPY</button>
+            </div>
+
+            <div class="progress-panel" id="trim-progress" hidden>
+              <div class="progress-head">
+                <p class="progress-status" id="trim-status" aria-live="polite">QUEUED</p>
+                <p class="progress-pct" id="trim-pct">0%</p>
+              </div>
+              <div class="progress-track" id="trim-track" role="progressbar" aria-label="Trim progress"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-fill" id="trim-bar"></div>
+              </div>
+              <div class="done-panel" id="trim-done" hidden>
+                <p class="done-note">Trimmed copy saved to your exports folder.</p>
+                <p class="done-filename" id="trim-filename"></p>
+                <div class="btn-row">
+                  <button class="btn btn-accent reveal-btn" id="trim-reveal" type="button">SHOW FILE</button>
+                </div>
+              </div>
+            </div>
+            <div class="error-panel" id="trim-error" role="alert" hidden></div>
           </div>
         </div>
       </div>

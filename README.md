@@ -135,7 +135,10 @@ contain a file path). The full list of events lives in [`stats.py`](stats.py).
    - **YouTube download**: paste a YouTube link and get an MP4 (H.264, up to
      1080p, ready for ProPresenter) or an MP3 — or tick **BATCH** and paste
      several links, one per line, to download them all (up to 50 at once,
-     three at a time). The first download fetches and
+     three at a time). Only need part of a long video? Press **Trim this
+     clip** when it finishes: drag the gold handles to the part you want
+     (or click a time to type it, or pick 30 sec / 1 min / 5 min), and a
+     trimmed copy is saved next to the original. The first download fetches and
      verifies the downloader tools (about 75 MB, one time); after that it
      keeps itself current automatically. Downloading a video is not a
      licence to show it — that call, and any rights/licensing needed for

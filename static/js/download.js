@@ -136,6 +136,7 @@
   }
 
   function downloadPayload() {
+    closeTrim();      // a new download replaces the finished panel
     var d = readDownload();
     lastSubmitWasBatch = d.batch;
     lastSubmitTotal = d.urls.length;
@@ -168,6 +169,7 @@
       }
     } else if (lastDoneUrl && d.url !== lastDoneUrl) {
       lastDoneUrl = "";
+      closeTrim();
       $("download-export").textContent = "DOWNLOAD";
       $("download-progress").hidden = true;
       $("download-done").hidden = true;
@@ -245,6 +247,20 @@
   }
 
   var toolsReady = false;
+
+  // The trim panel sits inside the done panel; whenever that panel is
+  // about to mean something else, the trim goes with it (and its player
+  // stops, rather than playing on from a hidden element).
+  function closeTrim() {
+    if (exportBusy["trim"]) return;
+    $("download-trim-open").hidden = true;
+    if (SV.tiles.trim) SV.tiles.trim.close();
+  }
+
+  $("download-trim-open").addEventListener("click", function () {
+    var name = $("download-trim-open").dataset.filename;
+    if (name && SV.tiles.trim) SV.tiles.trim.open(name);
+  });
 
   // ==================================================== RESULTS LIST ====
 
@@ -356,7 +372,13 @@
 
   var downloadTile = {
     update: updateDownload, validate: validateDownload, payload: downloadPayload,
-    enter: function () { fetchDownloadStatus(); updateDownload(); },
+    enter: function () {
+      // core.js hid the finished panel on the way in; the trim panel
+      // inside it goes too, unless a trim is still saving.
+      if (!exportBusy["trim"]) closeTrim();
+      fetchDownloadStatus();
+      updateDownload();
+    },
     leave: function () {},
     // The generic "RENDERING" is the wrong word for a download, and the
     // one-time tool setup (the first 30 % of a first run) needs naming or
@@ -393,6 +415,13 @@
       }
       setStatus("download", "SAVED");
       $("download-export").textContent = "DOWNLOAD ANOTHER";
+      // One file at a time keeps trimming simple (clip-trim.md), so only
+      // a single-link download offers it.
+      closeTrim();
+      var trimBtn = $("download-trim-open");
+      var trimmable = !lastSubmitWasBatch && /\.(mp4|mp3)$/i.test(filename || "");
+      trimBtn.hidden = !trimmable;
+      trimBtn.dataset.filename = trimmable ? filename : "";
       // job carries `items` only once core.js passes the full job object
       // through to done() (today it passes just the filename) — until
       // then this always falls back to the plain done panel, which is
@@ -421,6 +450,7 @@
   // label) since updateDownload()'s own staleness check below only ever
   // looks at the ONE key for the mode you are currently in.
   $("download-batch").addEventListener("change", function () {
+    closeTrim();
     lastDoneUrl = "";
     lastDoneBatchKey = "";
     $("download-progress").hidden = true;
@@ -451,6 +481,7 @@
     if (exportBusy["download"]) return;
     if ($("download-done").hidden) return;    // nothing finished yet
     e.preventDefault();
+    closeTrim();
     $("download-url").value = "";
     $("download-urls").value = "";
     lastDoneUrl = "";

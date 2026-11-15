@@ -2277,6 +2277,181 @@ input[type="range"] {
   gap: 10px;
 }
 
+/* Trim a downloaded clip (docs/specs/clip-trim.md). The bar under the
+   player is the "little box" that shows which part is kept: gold is what
+   gets saved, the white line is where the player is. */
+.trim-panel {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.trim-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--ink);
+}
+.trim-panel > .hint { margin: 0 0 12px; }
+.trim-player {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 8px;
+}
+.trim-player.is-audio { aspect-ratio: auto; height: 54px; background: transparent; }
+
+.trim-timeline {
+  position: relative;
+  height: 34px;
+  margin: 12px 8px 0;
+  background: var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.trim-keep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(232, 180, 79, 0.55);
+  border-top: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+}
+.trim-handle {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 12px;
+  margin-left: -6px;
+  background: var(--accent);
+  border-radius: 4px;
+  cursor: ew-resize;
+  box-shadow: 0 0 0 2px var(--panel-2);
+}
+.trim-playhead {
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+  pointer-events: none;
+}
+/* The gold part sits ABOVE the playhead (its fill is see-through, so the
+   line still shows inside it) so the "5:00 clip" label is never cut
+   through; the handles stay on top of both. */
+.trim-keep {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  z-index: 2;
+}
+.trim-playhead { z-index: 1; }
+.trim-handle { z-index: 3; }
+.trim-keep-label {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-ink);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* The start and end times, one each, under their handles. Inputs styled
+   as gold text (dashed = you can click to type), so they never look like
+   a second set of boxes repeating the bar. 15px: the owner asked for a
+   touch bigger than the 13px mockup, to read at a glance. */
+.trim-scale {
+  position: relative;
+  height: 28px;
+  margin: 8px 8px 0;
+}
+.trim-mark {
+  position: absolute;
+  top: 0;
+  width: 7ch;
+  padding: 2px 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dashed var(--accent);
+  border-radius: 0;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 15px;
+  text-align: center;
+  cursor: text;
+}
+.trim-mark:focus {
+  outline: none;
+  background: var(--well);
+  border-bottom-style: solid;
+}
+.trim-mark.is-bad { color: var(--red-ink); border-bottom-color: var(--red); }
+.trim-total {
+  position: absolute;
+  right: 0;
+  top: 3px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.trim-click-hint {
+  margin: 4px 8px 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+.trim-lengths {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.trim-lengths-label {
+  margin-right: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--ink-faint);
+}
+.btn.trim-small { padding: 8px 14px; font-size: 11px; letter-spacing: 0.08em; }
+.btn.trim-small.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.trim-keep-outside {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.trim-summary {
+  margin: 14px 0 0;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+.trim-summary.is-bad { color: var(--red-ink); }
+.trim-actions {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  margin-top: 16px;
+}
+.trim-actions .btn-export { flex: 1; margin-top: 0; }
+
 /* -------------------------------------------------------------- error */
 
 .error-panel {

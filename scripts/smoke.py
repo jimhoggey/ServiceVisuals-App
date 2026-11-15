@@ -4713,6 +4713,126 @@ def check_download_done_panel():
           '$("download-urls").value = "";' in js)
 
 
+def check_clip_trim():
+    """clip-trim.md: trimming a download makes a frame-accurate copy and
+    leaves the original alone. The cut is re-encoded rather than stream-
+    copied precisely so the start lands on the frame asked for -- checked
+    here against the source's own frame, not just the length."""
+    from PIL import Image, ImageChops
+    import app as _app
+    from render import trim
+    from validation import ValidationError, validate_trim_options
+
+    print()
+    print("Download: trim a clip")
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    os.makedirs(EXPORTS_DIR, exist_ok=True)
+    src_name = "smoke trim source.mp4"
+    src = os.path.join(EXPORTS_DIR, src_name)
+    made = [src]
+    tmp = tempfile.mkdtemp(prefix="sv-smoke-trim-")
+    try:
+        subprocess.run(
+            [ff, "-v", "error", "-y",
+             "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30:d=12",
+             "-f", "lavfi", "-i", "sine=f=440:d=12",
+             "-c:v", "libx264", "-g", "300", "-c:a", "aac", "-shortest",
+             src], check=True)
+        check("the source's length is read from the file",
+              abs((trim.probe_duration(src) or 0) - 12.0) < 0.1)
+
+        def err(opts):
+            try:
+                validate_trim_options(opts)
+            except ValidationError as exc:
+                return str(exc)
+            return None
+
+        check("no file -> plain message",
+              err({}) == "Pick a downloaded file to trim.")
+        check("a .mov is refused",
+              err({"filename": "x.mov", "start": 0, "end": 1}) ==
+              "Only MP4 and MP3 downloads can be trimmed.")
+        check("a path outside exports is refused",
+              err({"filename": "../app.mp4", "start": 0, "end": 1}) ==
+              "That file isn't in your exports folder any more.")
+        check("text times are refused",
+              err({"filename": src_name, "start": "1:00", "end": 3}) ==
+              "Type the start and end as times, like 1:30.")
+        check("start after end is refused",
+              err({"filename": src_name, "start": 5, "end": 4}) ==
+              "The start has to be before the end.")
+        check("a sub-half-second clip is refused",
+              err({"filename": src_name, "start": 5, "end": 5.2}) ==
+              "The clip has to be at least half a second long.")
+        check("an end past the video says how long it is",
+              err({"filename": src_name, "start": 1, "end": 40}) ==
+              "The end is past the end of the video (it is 0:12 long).")
+
+        opts = validate_trim_options(
+            {"filename": src_name, "start": 4.5, "end": 7.5})
+        before = os.path.getmtime(src)
+        name = trim.trim_clip(opts, lambda pct: None)
+        out = os.path.join(EXPORTS_DIR, name)
+        made.append(out)
+        check("the copy is named after the original and the times",
+              name == "smoke trim source (0m04s to 0m07s).mp4", name)
+        check("the copy is 3 s long",
+              abs((trim.probe_duration(out) or 0) - 3.0) < 0.05)
+        check("the original is untouched",
+              os.path.getmtime(src) == before)
+        check("no .part is left behind", not os.path.exists(out + ".part"))
+
+        a = os.path.join(tmp, "a.png")
+        b = os.path.join(tmp, "b.png")
+        subprocess.run([ff, "-v", "error", "-y", "-i", out,
+                        "-frames:v", "1", a], check=True)
+        subprocess.run([ff, "-v", "error", "-y", "-ss", "4.5", "-i", src,
+                        "-frames:v", "1", b], check=True)
+        diff = ImageChops.difference(Image.open(a).convert("L"),
+                                     Image.open(b).convert("L"))
+        mean = sum(diff.getdata()) / float(640 * 360)
+        check("the copy starts on the exact frame asked for", mean < 1.0,
+              "mean diff %.2f" % mean)
+
+        again = trim.trimmed_name(src_name, 4.5, 7.5)
+        check("trimming the same part twice never overwrites",
+              again == "smoke trim source (0m04s to 0m07s) 2.mp4", again)
+
+        client = _app.app.test_client()
+        resp = client.get("/api/download/media/" + src_name,
+                          headers={"Range": "bytes=0-99"})
+        check("the player can seek (range request answered 206)",
+              resp.status_code == 206 and len(resp.data) == 100)
+        resp.close()
+        resp = client.get("/api/download/media/..%2Fapp.py")
+        check("the media route refuses anything outside exports",
+              resp.status_code == 404)
+    finally:
+        for path in made:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(here, "static", "js", "trim.js"),
+              encoding="utf-8") as f:
+        js = f.read()
+    check("Enter in a trim field can't submit DOWNLOAD ANOTHER",
+          'if (e.key === "Enter") { e.preventDefault();' in js)
+    with open(os.path.join(here, "static", "index.html"),
+              encoding="utf-8") as f:
+        html = f.read()
+    # The owner's rule: each time shown once. The first build's START /
+    # LENGTH / END boxes and SET HERE buttons repeated the bar's own
+    # times and read as "too complicated" for a first-timer.
+    check("the trim panel shows each time once (no time boxes)",
+          'id="trim-length"' not in html and 'id="trim-set-start"'
+          not in html and 'class="trim-mark" id="trim-start"' in html)
+
+
 def check_js_modules():
     """static/js/ is seven plain script files sharing one `SV` object, with
     no bundler to notice a tile calling something it never imported. That
@@ -4895,6 +5015,7 @@ def main():
     check_batch_download()
     print()
     check_download_done_panel()
+    check_clip_trim()
     check_js_modules()
     print()
 

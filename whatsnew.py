@@ -29,6 +29,12 @@ INTRO = "Nice. You're up to date."
 # run longer (92/94/106 chars) because they shipped before that guideline
 # was written down — left as-is rather than reworded after the fact.
 NOTES = {
+    "1.49.0": [
+        "YouTube download: TRIM THIS CLIP keeps just the part you need "
+        "from a long video.",
+        "Drag the gold handles, or press 1 MIN or 5 MIN. Your full "
+        "download is kept.",
+    ],
     "1.48.0": [
         "Scoreboard: Make a scoreboard from scratch — team names, scores, "
         "and a Bars, Cards or Podium look.",

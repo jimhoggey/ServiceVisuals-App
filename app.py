@@ -35,6 +35,7 @@ from render.spinner import render_spinner
 from render.qr import (render_qr, render_qr_backdrop, render_qr_image,
                        render_qr_preview)
 from render.motionbg import render_motion_bg
+from render.trim import trim_clip
 from validation import (DOWNLOAD_FORMATS, MOTIONBG_STYLES, QR_STYLES,
                         SPINNER_MODES, TIMER_STYLES, VALIDATORS,
                         ValidationError, _one_of, validate_qr_options)
@@ -277,7 +278,10 @@ jobs = JobManager({"timer": _counted("timer", render_timer, _timer_props),
                    "qr": _counted("qr", render_qr, _qr_props),
                    "motionbg": _counted("motionbg", render_motion_bg,
                                         _motionbg_props),
-                   "download": _counted_download},
+                   "download": _counted_download,
+                   # No props: the tool name alone. The filename and the
+                   # times are the operator's content (stats.py's rule).
+                   "trim": _counted("trim", trim_clip)},
                   on_error=_on_job_error)
 
 

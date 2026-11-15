@@ -444,6 +444,54 @@ Paste a link, choose MP4 or MP3, press DOWNLOAD.
   saved in your exports folder."**, not a lone filename.
 - **DOWNLOAD ANOTHER** clears the box for the next one.
 
+### Trimming a download (docs/specs/clip-trim.md)
+
+The owner's case: a 15-minute video, and only one minute of it is needed.
+After a single download, **TRIM THIS CLIP** opens a player and a gold
+bar. The start and end times sit under the bar's handles.
+
+- **Each time is shown once.** The first build had START / LENGTH / END
+  boxes, SET HERE buttons and a summary sentence. The owner found it
+  "too complicated" for a first-timer, because it showed every time two
+  or three times. Now the start and end are gold text under the handles
+  (click to type), and the length sits inside the gold part.
+- The owner thinks in "from here, for this long" ("from the start, only
+  five minutes"), so CLIP LENGTH 30 SEC / 1 MIN / 5 MIN stays.
+- The gold box on the bar is the part that gets saved, and the player
+  jumps to whichever edge is being dragged, so the cut point is visible.
+- The original download is never changed; the copy is named with its
+  times, e.g. `Song (2m30s to 3m30s).mp4`.
+- The trim fields live inside the download form, whose button is
+  DOWNLOAD ANOTHER. Enter in a trim field must not submit it.
+- Batch downloads don't offer trimming (one file at a time keeps it
+  simple). Open question: does the owner want to trim a file downloaded
+  in an earlier session?
+- A stale "done" message must clear as soon as a new edit starts that
+  could be mistaken for it. (New rule, from the trimmer's review.)
+
+**Found and fixed** (before the trimmer shipped, from its UX review)
+- The panel opened on the whole video with a bright SAVE ready, which
+  would have saved a copy identical to the download. It now reads
+  "Nothing trimmed yet — this is the whole 7:00…" and SAVE waits.
+- The previous trim's SAVED panel stayed under SAVE while the next clip
+  was being set up. Any edit now clears it (the file stays in THIS
+  SESSION).
+- Dragging produced times like 2:03.5. It now lands on whole seconds.
+- The time boxes repeated what the bar already showed (owner, from a
+  screenshot). They were removed; see "Each time is shown once" above.
+- Second review, of the simpler layout:
+  - A short clip lost its only length label, which needs a wide gold
+    part. It now sits beside the gold part.
+  - The length buttons never showed which was set. The matching one now
+    lights up.
+  - "One minute from 2:00" was hard to find. The row now reads LENGTH
+    FROM START, and the nudge says to set the start first.
+  - A bad typed time stayed in the field. It now goes back to the last
+    good time when you leave the field.
+- New rule: a value the operator sets must be readable at every size.
+  If its label doesn't fit inside the control, it moves outside. Preset
+  buttons show which one is in effect.
+
 ### What the status line promises
 
 "Downloader ready" is a promise that pressing DOWNLOAD will work. It must

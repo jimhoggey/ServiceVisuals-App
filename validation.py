@@ -780,6 +780,50 @@ VALIDATORS = {
 }
 
 
+def validate_trim_options(options):
+    """docs/specs/clip-trim.md. Resolves the file here, not in the job, so
+    a bad name or a time past the end is a 400 the trim panel shows at
+    once rather than a job that fails after queueing."""
+    from render import trim      # ffmpeg probe; kept out of import time
+    filename = options.get("filename")
+    if not isinstance(filename, str) or not filename.strip():
+        raise ValidationError("Pick a downloaded file to trim.")
+    if os.path.splitext(filename)[1].lower() not in trim.TRIM_EXTS:
+        raise ValidationError("Only MP4 and MP3 downloads can be trimmed.")
+    path = trim.resolve_export(filename)
+    if path is None:
+        raise ValidationError(
+            "That file isn't in your exports folder any more.")
+    start = options.get("start")
+    end = options.get("end")
+    for value in (start, end):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or value != value or value in (float("inf"), float("-inf")):
+            raise ValidationError(
+                "Type the start and end as times, like 1:30.")
+    start = max(0.0, float(start))
+    end = float(end)
+    if end <= start:
+        raise ValidationError("The start has to be before the end.")
+    if end - start < trim.MIN_CLIP_SECONDS:
+        raise ValidationError(
+            "The clip has to be at least half a second long.")
+    duration = trim.probe_duration(path)
+    if duration is not None:
+        if end > duration + 0.5:
+            raise ValidationError(
+                "The end is past the end of the video (it is {0} long)."
+                .format(trim.clock(duration)))
+        end = min(end, duration)
+        if end - start < trim.MIN_CLIP_SECONDS:
+            raise ValidationError(
+                "The clip has to be at least half a second long.")
+    return {"path": path, "start": start, "end": end}
+
+
+VALIDATORS["trim"] = validate_trim_options
+
+
 # ---------------------------------------------------------------------------
 # scoreboard validation
 # ---------------------------------------------------------------------------
